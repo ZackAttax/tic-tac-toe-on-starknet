@@ -7,6 +7,9 @@ import { useEffect } from 'react';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/components/useColorScheme';
+import { StarknetConnectorProvider } from './context/StarknetConnector';
+import { FocEngineProvider } from './context/FocEngineConnector';
+import { TicTacToeProvider } from './context/TicTacToeContractConnector';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -50,10 +53,16 @@ function RootLayoutNav() {
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-      </Stack>
+      <StarknetConnectorProvider>
+        <FocEngineProvider>
+          <TicTacToeProvider>
+            <Stack>
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
+            </Stack>
+          </TicTacToeProvider>
+        </FocEngineProvider>
+      </StarknetConnectorProvider>
     </ThemeProvider>
   );
 }
