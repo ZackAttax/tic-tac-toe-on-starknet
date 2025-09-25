@@ -761,6 +761,12 @@ export const StarknetConnectorProvider: React.FC<{
             Platform.OS === "android" ? "http://10.0.2.2:8080" : "http://localhost:8080";
           const focEngineUrl =
             process.env.EXPO_PUBLIC_FOC_ENGINE_API || defaultFocEngineUrl;
+          if (__DEV__)
+            console.log("Using backend paymaster provider", {
+              focEngineUrl,
+              network,
+              account: invokeAccount?.address,
+            });
           const buildGaslessTxDataUrl = `${focEngineUrl}/paymaster/build-gasless-tx`;
           const gaslessTxInput = {
             account: invokeAccount.address,
@@ -783,6 +789,7 @@ export const StarknetConnectorProvider: React.FC<{
                 console.error("Error building gasless tx data:", error);
               throw error;
             });
+          if (__DEV__) console.log("build-gasless-tx response:", gaslessTxRes);
 
           if (gaslessTxRes.error) {
             if (__DEV__)
@@ -856,8 +863,20 @@ export const StarknetConnectorProvider: React.FC<{
           }
 
           if (__DEV__)
-            console.log("📤 Gasless transaction sent:", sendGaslessTxRes);
-          return sendGaslessTxRes;
+            console.log("📤 Gasless transaction sent (raw):", sendGaslessTxRes);
+
+          const txHashCandidate =
+            sendGaslessTxRes?.data?.transactionHash ||
+            sendGaslessTxRes?.transaction_hash ||
+            sendGaslessTxRes?.data?.txHash ||
+            sendGaslessTxRes?.txHash ||
+            (typeof sendGaslessTxRes === "string" ? sendGaslessTxRes : undefined);
+
+          const normalized = txHashCandidate
+            ? { data: { transactionHash: txHashCandidate } }
+            : sendGaslessTxRes;
+          if (__DEV__) console.log("📄 Normalized paymaster response:", normalized);
+          return normalized;
         } else {
           // Use gasless-sdk to execute calls with paymaster
           const options: GaslessOptions = {
@@ -945,7 +964,9 @@ export const StarknetConnectorProvider: React.FC<{
           return null;
         }
       } else {
-        return await invokeWithPaymaster(calls, undefined, retries);
+        const res = await invokeWithPaymaster(calls, undefined, retries);
+        if (__DEV__) console.log("invokeWithPaymaster result:", res);
+        return res;
       }
     },
     [invokeWithPaymaster, invokeContractCalls, network, STARKNET_ENABLED],

@@ -42,6 +42,7 @@ export default function PlayScreen() {
   const [gameStarted, setGameStarted] = useState(false);
   const { createGame, playMove, getGame, currentGameId, loadGame } = useTicTacToe();
   const [invitations, setInvitations] = useState<{ id: number; from: string }[]>([]);
+  const [joinGameId, setJoinGameId] = useState('');
 
   const colorScheme = useColorScheme() ?? 'light';
   const tint = Colors[colorScheme].tint;
@@ -52,7 +53,7 @@ export default function PlayScreen() {
 
   // Sync board periodically from on-chain state so opponent moves are reflected
   useEffect(() => {
-    if (!gameStarted || currentGameId == null) return;
+    if (currentGameId == null) return;
 
     const bitsToBoard = (xBits: number, oBits: number): CellValue[] => {
       const arr: CellValue[] = Array(9).fill(null);
@@ -67,6 +68,7 @@ export default function PlayScreen() {
     const sync = async () => {
       try {
         const game = await getGame(currentGameId);
+        console.log('gameId', currentGameId);
         if (cancelled || !game) return;
         setBoard(bitsToBoard(game.x_bits, game.o_bits));
         setCurrentPlayer(game.turn === 0 ? 'X' : 'O');
@@ -80,12 +82,12 @@ export default function PlayScreen() {
 
     // initial fetch + interval
     sync();
-    const id = setInterval(sync, 2500);
+    const id = setInterval(sync, 1000);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [gameStarted, currentGameId, getGame, account]);
+  }, [currentGameId, getGame, account]);
 
   // Poll for invitations (games where I am player O and game is ongoing)
   useEffect(() => {
@@ -119,16 +121,26 @@ export default function PlayScreen() {
     };
   }, [account, getGame]);
 
-  function handleStartGame() {
+  async function handleStartGame() {
     if (!opponentAddress.trim()) return;
     setBoard(Array(9).fill(null));
     setCurrentPlayer('X');
+    setMyRole('X');
     setGameStarted(true);
-    createGame(opponentAddress);
+    await createGame(opponentAddress);
+  }
+
+  function handleJoinGame() {
+    const id = parseInt(joinGameId.trim(), 10);
+    if (Number.isNaN(id) || id < 0) return;
+    loadGame(id);
+    setGameStarted(true);
+    setJoinGameId('');
   }
 
   function handleCellPress(index: number) {
     if (!gameStarted || winner) return;
+    if (__DEV__) console.log('cell pressed', index, { currentGameId, isMyTurn });
     setBoard((prev) => {
       if (index == null || prev[index] !== null) return prev;
       const next = prev.slice();
@@ -182,6 +194,13 @@ export default function PlayScreen() {
           <Text selectable style={styles.addressValue}>{account.address}</Text>
         </View>
 
+        {currentGameId != null && (
+          <View style={styles.gameIdRow}>
+            <Text style={styles.label}>Game ID</Text>
+            <Text selectable style={styles.gameIdValue}>{String(currentGameId)}</Text>
+          </View>
+        )}
+
         <View style={styles.inputRow}>
           <Text style={styles.label}>Opponent address</Text>
           <TextInput
@@ -210,6 +229,37 @@ export default function PlayScreen() {
             ]}
           >
             <Text style={styles.startButtonText}>{gameStarted ? 'Restart' : 'Start Game'}</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.inputRow}>
+          <Text style={styles.label}>Join game by ID</Text>
+          <TextInput
+            value={joinGameId}
+            onChangeText={setJoinGameId}
+            placeholder="e.g., 3"
+            placeholderTextColor={Platform.select({ ios: '#999', android: '#999' })}
+            keyboardType="number-pad"
+            returnKeyType="done"
+            style={[
+              styles.input,
+              {
+                borderColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.2)',
+                color: Colors[colorScheme].text,
+                backgroundColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.03)',
+              },
+            ]}
+          />
+          <Pressable
+            accessibilityRole="button"
+            onPress={handleJoinGame}
+            disabled={!/^[0-9]+$/.test(joinGameId.trim())}
+            style={({ pressed }) => [
+              styles.startButton,
+              { backgroundColor: tint, opacity: !/^[0-9]+$/.test(joinGameId.trim()) ? 0.5 : pressed ? 0.8 : 1 },
+            ]}
+          >
+            <Text style={styles.startButtonText}>Join Game</Text>
           </Pressable>
         </View>
 
@@ -384,6 +434,13 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   addressValue: {
+    fontSize: 12,
+    opacity: 0.9,
+  },
+  gameIdRow: {
+    gap: 6,
+  },
+  gameIdValue: {
     fontSize: 12,
     opacity: 0.9,
   },
