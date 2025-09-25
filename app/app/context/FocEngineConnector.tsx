@@ -11,7 +11,7 @@ import focRegistryAbi from "../abis/foc_registry.json";
 import focAccountsAbi from "../abis/foc_accounts.json";
 
 export const FOC_ENGINE_API =
-  process.env.EXPO_PUBLIC_FOC_ENGINE_API || "http://localhost:8080";
+  process.env.EXPO_PUBLIC_FOC_ENGINE_API;
 
 export type FocAccount = {
   account_address: string;
@@ -240,6 +240,7 @@ export const FocEngineProvider: React.FC<{ children: React.ReactNode }> = ({
   }, [provider]);
 
   useEffect(() => {
+    console.log("STARKNET_ENABLED", STARKNET_ENABLED);
     if (!STARKNET_ENABLED) {
       console.warn("Starknet is not enabled, skipping contract address fetch");
       return;
@@ -716,6 +717,7 @@ export const FocEngineProvider: React.FC<{ children: React.ReactNode }> = ({
           console.error("Contract version is invalid");
           return null;
         }
+        console.log("FOC_ENGINE_API", FOC_ENGINE_API, contractNameHex, contractVersionHex, "strinsg", contractName, contractVersion);
         const response = await fetch(
           `${FOC_ENGINE_API}/registry/get-registered-contract?contractName=${contractNameHex}&contractVersion=${contractVersionHex}`,
         );
@@ -723,6 +725,7 @@ export const FocEngineProvider: React.FC<{ children: React.ReactNode }> = ({
           throw new Error("Failed to fetch registered contract");
         }
         const data = await response.json();
+        console.log("response", data);
         // Example response: {"data": {"_id":"68329c6719d52373c50d2f9b","block_number":7,"contract":{"version":"0x76302e302e31","class_hash":"0x4be80b63cfff1fef3474af7f67e0df944ea5fb14c71926685a32d3e0bc53351","name":"0x506f772047616d65"},"contract_address":"0x315c74955e8eb4442a11d8aa0d614e14a7ed84de79b65b21143c5f8ba69c286","event_type":"onchain::registry::FocRegistry::ContractRegistered","transaction_hash":"0x2ee1697136f73048618370503fc477044ec92de1ff8ac4370be04d4bb9be911"}}
         return data.data.contract_address;
       } catch (error) {

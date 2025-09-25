@@ -18,15 +18,18 @@ type Game = {
   o_bits: number;
   turn: number; // 0 = X, 1 = O
   status: number; // 0 ongoing, 1 X won, 2 O won, 3 draw
+  gameId: number;
 };
 
 type TicTacToeContextType = {
   contractAddress: string | null;
   contract: Contract | null;
 
-  createGame: (opponentAddress: string) => Promise<string | null>; // returns tx hash or null (devnet generates mock hash)
+  currentGameId: number | null;
+  createGame: (opponentAddress: string) => Promise<number | null>; // returns game id or null
   playMove: (gameId: number, cell: number) => Promise<string | null>;
   getGame: (gameId: number) => Promise<Game | null>;
+  loadGame: (gameId: number) => void;
 };
 
 const TicTacToeContext = createContext<TicTacToeContextType | undefined>(
@@ -48,13 +51,15 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
     account,
     invokeCalls,
     network,
+    waitForTransaction,
   } = useStarknetConnector();
-  const { getRegisteredContract, connectContract } = useFocEngine();
+  const { connectContract } = useFocEngine();
 
   const [contractAddress, setContractAddress] = useState<string | null>(
     process.env.EXPO_PUBLIC_TIC_TAC_TOE_CONTRACT_ADDRESS || null,
   );
   const [contract, setContract] = useState<Contract | null>(null);
+  const [currentGameId, setCurrentGameId] = useState<number | null>(null);
 
   // Build ABI once
   const abi = useMemo(() => {
@@ -63,19 +68,8 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
     return anyArtifact.abi ?? anyArtifact;
   }, []);
 
-  // Resolve contract address (env first, fallback to registry via FOC engine)
-  useEffect(() => {
-    if (!STARKNET_ENABLED) return;
-    (async () => {
-      if (contractAddress) return; // already set via env
-      try {
-        const addr = await getRegisteredContract("TicTacToe", "latest");
-        if (addr) setContractAddress(addr);
-      } catch (e) {
-        if (__DEV__) console.warn("Failed to resolve TicTacToe address", e);
-      }
-    })();
-  }, [STARKNET_ENABLED, contractAddress, getRegisteredContract]);
+  // Contract address is provided via env (`EXPO_PUBLIC_TIC_TAC_TOE_CONTRACT_ADDRESS`)
+  // No registry fallback
 
   // Instantiate contract when we have provider and address
   useEffect(() => {
@@ -101,7 +95,7 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
   }, [STARKNET_ENABLED, account, contract]);
 
   const createGame = useCallback(
-    async (opponentAddress: string): Promise<string | null> => {
+    async (opponentAddress: string): Promise<number | null> => {
       if (!STARKNET_ENABLED || !contractAddress) return null;
       const call: Call = {
         contractAddress,
@@ -109,11 +103,54 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
         calldata: [opponentAddress],
       };
       const res = await invokeCalls([call], 1);
-      // res may be null on devnet invoke; attempt to extract tx hash
       const txHash = (res?.data?.transactionHash || res?.transaction_hash) ?? null;
-      return txHash;
+      if (!txHash || !provider) return null;
+
+      try {
+        // Ensure the transaction is confirmed on-chain
+        await waitForTransaction(txHash);
+      } catch (_) {
+        // continue to attempt parsing receipt anyway
+      }
+
+      try {
+        const receipt: any = await (provider as any).getTransactionReceipt(txHash);
+        const normalize = (s: string | undefined | null) =>
+          (s || "").toLowerCase();
+        const expectedX = normalize(account?.address || "");
+        const expectedO = normalize(opponentAddress);
+
+        let foundId: number | null = null;
+        const events: any[] = (receipt?.events || []) as any[];
+        for (const ev of events) {
+          const data: string[] = (ev?.data || []).map((d: any) =>
+            typeof d === "string" ? d : d?.toString?.() || String(d),
+          );
+          if (data.length >= 3) {
+            const [gidHex, xAddr, oAddr] = data;
+            const xNorm = normalize(xAddr);
+            const oNorm = normalize(oAddr);
+            if (xNorm === expectedX && oNorm === expectedO) {
+              try {
+                const gid = Number(BigInt(gidHex));
+                foundId = gid;
+                break;
+              } catch (_) {}
+            }
+          }
+        }
+
+        if (foundId !== null) {
+          setCurrentGameId(foundId);
+          return foundId;
+        }
+      } catch (e) {
+        if (__DEV__) console.warn("Failed to parse GameCreated event", e);
+      }
+
+      return null;
     },
-    [STARKNET_ENABLED, contractAddress, invokeCalls],
+    [STARKNET_ENABLED, contractAddress, invokeCalls, provider, account, waitForTransaction],
   );
 
   const playMove = useCallback(
@@ -130,6 +167,11 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
     },
     [STARKNET_ENABLED, contractAddress, invokeCalls],
   );
+
+  const loadGame = useCallback((gameId: number) => {
+    if (!STARKNET_ENABLED) return;
+    setCurrentGameId(Number(gameId));
+  }, [STARKNET_ENABLED]);
 
   const getGame = useCallback(
     async (gameId: number): Promise<Game | null> => {
@@ -154,6 +196,7 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
           o_bits: toNum(raw.o_bits),
           turn: toNum(raw.turn),
           status: toNum(raw.status),
+          gameId: Number(gameId),
         };
         return game;
       } catch (e) {
@@ -169,9 +212,11 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
       value={{
         contractAddress,
         contract,
+        currentGameId,
         createGame,
         playMove,
         getGame,
+        loadGame,
       }}
     >
       {children}

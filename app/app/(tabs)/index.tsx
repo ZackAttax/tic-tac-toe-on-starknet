@@ -1,9 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput } from 'react-native';
 import { Text, View } from '@/components/Themed';
 import TicTacToeBoard from '@/components/TicTacToeBoard';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
+import { useTicTacToe } from '@/app/context/TicTacToeContractConnector';
+import { useStarknetConnector } from '@/app/context/StarknetConnector';
+import AccountGate from '@/components/AccountGate';
 
 type CellValue = 'X' | 'O' | null;
 
@@ -31,33 +34,111 @@ function isBoardFull(board: CellValue[]): boolean {
 }
 
 export default function PlayScreen() {
+  const { account } = useStarknetConnector();
   const [opponentAddress, setOpponentAddress] = useState('');
   const [board, setBoard] = useState<CellValue[]>(Array(9).fill(null));
   const [currentPlayer, setCurrentPlayer] = useState<'X' | 'O'>('X');
+  const [myRole, setMyRole] = useState<'X' | 'O' | null>(null);
   const [gameStarted, setGameStarted] = useState(false);
+  const { createGame, playMove, getGame, currentGameId, loadGame } = useTicTacToe();
+  const [invitations, setInvitations] = useState<{ id: number; from: string }[]>([]);
 
   const colorScheme = useColorScheme() ?? 'light';
   const tint = Colors[colorScheme].tint;
 
   const { winner, line: winningLine } = useMemo(() => calculateWinner(board), [board]);
   const isDraw = useMemo(() => !winner && isBoardFull(board), [board, winner]);
+  const isMyTurn = useMemo(() => (myRole ? currentPlayer === myRole : false), [currentPlayer, myRole]);
+
+  // Sync board periodically from on-chain state so opponent moves are reflected
+  useEffect(() => {
+    if (!gameStarted || currentGameId == null) return;
+
+    const bitsToBoard = (xBits: number, oBits: number): CellValue[] => {
+      const arr: CellValue[] = Array(9).fill(null);
+      for (let i = 0; i < 9; i++) {
+        if ((xBits & (1 << i)) !== 0) arr[i] = 'X';
+        else if ((oBits & (1 << i)) !== 0) arr[i] = 'O';
+      }
+      return arr;
+    };
+
+    let cancelled = false;
+    const sync = async () => {
+      try {
+        const game = await getGame(currentGameId);
+        if (cancelled || !game) return;
+        setBoard(bitsToBoard(game.x_bits, game.o_bits));
+        setCurrentPlayer(game.turn === 0 ? 'X' : 'O');
+        const me = (account?.address || '').toLowerCase();
+        const playerX = (game.player_x || '').toLowerCase();
+        const playerO = (game.player_o || '').toLowerCase();
+        const role = me === playerX ? 'X' : me === playerO ? 'O' : null;
+        setMyRole(role);
+      } catch {}
+    };
+
+    // initial fetch + interval
+    sync();
+    const id = setInterval(sync, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [gameStarted, currentGameId, getGame, account]);
+
+  // Poll for invitations (games where I am player O and game is ongoing)
+  useEffect(() => {
+    if (!account) return;
+    let cancelled = false;
+
+    const fetchInvites = async () => {
+      try {
+        // Heuristic scan of recent gameIds. In production, index events off-chain or store ids locally.
+        const MAX_SCAN = 25;
+        const found: { id: number; from: string }[] = [];
+        for (let gid = 0; gid < MAX_SCAN; gid++) {
+          const g = await getGame(gid).catch(() => null);
+          if (!g) continue;
+          const me = (account.address || '').toLowerCase();
+          const px = (g.player_x || '').toLowerCase();
+          const po = (g.player_o || '').toLowerCase();
+          const invited = po === me && g.x_bits === 0 && g.o_bits === 0 && g.status === 0;
+          if (invited) {
+            found.push({ id: gid, from: px });
+          }
+        }
+        if (!cancelled) setInvitations(found);
+      } catch {}
+    };
+    fetchInvites();
+    const id = setInterval(fetchInvites, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [account, getGame]);
 
   function handleStartGame() {
     if (!opponentAddress.trim()) return;
     setBoard(Array(9).fill(null));
     setCurrentPlayer('X');
     setGameStarted(true);
+    createGame(opponentAddress);
   }
 
   function handleCellPress(index: number) {
     if (!gameStarted || winner) return;
     setBoard((prev) => {
-      if (prev[index] !== null) return prev;
+      if (index == null || prev[index] !== null) return prev;
       const next = prev.slice();
       next[index] = currentPlayer;
       return next;
     });
     setCurrentPlayer((p) => (p === 'X' ? 'O' : 'X'));
+    if (currentGameId != null) {
+      playMove(currentGameId, index);
+    }
   }
 
   function handleReset() {
@@ -77,8 +158,16 @@ export default function PlayScreen() {
     : isDraw
       ? 'Draw'
       : gameStarted
-        ? `Your turn: ${currentPlayer}`
+        ? myRole
+          ? isMyTurn
+            ? `Your turn (${myRole})`
+            : `Opponent's turn (${currentPlayer})`
+          : 'Waiting for players'
         : 'Enter an address to start';
+
+  if (!account) {
+    return <AccountGate />;
+  }
 
   return (
     <KeyboardAvoidingView
@@ -87,6 +176,11 @@ export default function PlayScreen() {
     >
       <View style={styles.content}>
         <Text style={styles.title}>Tic Tac Toe</Text>
+
+        <View style={styles.addressRow}>
+          <Text style={styles.label}>Your address</Text>
+          <Text selectable style={styles.addressValue}>{account.address}</Text>
+        </View>
 
         <View style={styles.inputRow}>
           <Text style={styles.label}>Opponent address</Text>
@@ -119,6 +213,30 @@ export default function PlayScreen() {
           </Pressable>
         </View>
 
+        {invitations.length > 0 && !gameStarted && (
+          <View style={styles.invitePanel}>
+            <Text style={styles.inviteTitle}>Invitations</Text>
+            {invitations.map((inv) => (
+              <View key={inv.id} style={styles.inviteRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inviteText}>Game #{inv.id} from</Text>
+                  <Text selectable numberOfLines={1} style={styles.inviteFrom}>{inv.from}</Text>
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => {
+                    loadGame(inv.id);
+                    setGameStarted(true);
+                  }}
+                  style={({ pressed }) => [styles.acceptButton, { opacity: pressed ? 0.8 : 1 }]}
+                >
+                  <Text style={styles.acceptText}>Accept</Text>
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        )}
+
         <View style={styles.statusRow}>
           <Text style={styles.status}>{statusText}</Text>
           {gameStarted && (
@@ -131,7 +249,7 @@ export default function PlayScreen() {
         <TicTacToeBoard
           board={board}
           onCellPress={handleCellPress}
-          disabled={!gameStarted || !!winner}
+          disabled={!gameStarted || !!winner || !isMyTurn}
           winningLine={winningLine ?? undefined}
           style={styles.board}
         />
@@ -149,6 +267,44 @@ export default function PlayScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  invitePanel: {
+    marginTop: 8,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth * 2,
+    borderColor: 'rgba(127,127,127,0.4)'
+  },
+  inviteTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  inviteRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 8,
+  },
+  inviteText: {
+    fontSize: 14,
+    opacity: 0.85,
+  },
+  inviteFrom: {
+    fontSize: 12,
+    opacity: 0.8,
+  },
+  acceptButton: {
+    height: 36,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#34c759',
+  },
+  acceptText: {
+    color: '#fff',
+    fontWeight: '700',
   },
   content: {
     flex: 1,
@@ -223,5 +379,12 @@ const styles = StyleSheet.create({
   newGameText: {
     fontSize: 15,
     fontWeight: '600',
+  },
+  addressRow: {
+    gap: 6,
+  },
+  addressValue: {
+    fontSize: 12,
+    opacity: 0.9,
   },
 });

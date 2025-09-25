@@ -27,6 +27,7 @@ import {
   GaslessOptions,
   SEPOLIA_BASE_URL,
 } from "@avnu/gasless-sdk";
+import { Platform } from "react-native";
 
 export const LOCALHOST_RPC_URL =
   process.env.EXPO_PUBLIC_LOCALHOST_RPC_URL || "http://localhost:5050/rpc";
@@ -223,7 +224,7 @@ export const StarknetConnectorProvider: React.FC<{
   const [network, setNetwork] = useState<string>(
     process.env.EXPO_PUBLIC_STARKNET_CHAIN || "SN_SEPOLIA",
   );
-
+  console.log(process.env.EXPO_PUBLIC_ENABLE_STARKNET, "EXPO_STARKNET_ENABLED");
   const STARKNET_ENABLED =
     process.env.EXPO_PUBLIC_ENABLE_STARKNET === "true" ||
     process.env.EXPO_PUBLIC_ENABLE_STARKNET === "1";
@@ -756,8 +757,10 @@ export const StarknetConnectorProvider: React.FC<{
         if (apiKey === "") {
           // Run using backend paymaster provider
           const formattedCalls = formatCall(calls);
+          const defaultFocEngineUrl =
+            Platform.OS === "android" ? "http://10.0.2.2:8080" : "http://localhost:8080";
           const focEngineUrl =
-            process.env.EXPO_PUBLIC_FOC_ENGINE_API || "http://localhost:8080";
+            process.env.EXPO_PUBLIC_FOC_ENGINE_API || defaultFocEngineUrl;
           const buildGaslessTxDataUrl = `${focEngineUrl}/paymaster/build-gasless-tx`;
           const gaslessTxInput = {
             account: invokeAccount.address,
@@ -906,13 +909,41 @@ export const StarknetConnectorProvider: React.FC<{
       }
       if (__DEV__) console.log("🚀 Invoking contract calls:", calls.length);
       if (network === "SN_DEVNET") {
-        await invokeContractCalls(calls, retries);
-        // TODO: Get real transaction hash from devnet
-        return {
-          data: {
-            transactionHash: "0x" + Math.random().toString(16).substr(2, 64),
-          },
+        if (!account) {
+          console.error("Account is not connected.");
+          return null;
+        }
+
+        const invokeFunction = async () => {
+          return await account.execute(calls, {
+            maxFee: 100_000_000_000_000,
+          });
         };
+
+        try {
+          const res =
+            retries > 0
+              ? await executeWithRetries(
+                  invokeFunction,
+                  waitForTransaction,
+                  retries,
+                )
+              : await invokeFunction();
+
+          const txHash = res?.transaction_hash;
+          if (__DEV__ && txHash)
+            console.log(
+              `✅ Calls executed successfully. Transaction hash: ${txHash}`,
+            );
+
+          return {
+            data: { transactionHash: txHash },
+            transaction_hash: txHash,
+          };
+        } catch (error) {
+          console.error("Error executing calls on devnet:", error);
+          return null;
+        }
       } else {
         return await invokeWithPaymaster(calls, undefined, retries);
       }
