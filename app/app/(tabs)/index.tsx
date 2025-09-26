@@ -74,7 +74,6 @@ export default function PlayScreen() {
     const sync = async () => {
       try {
         const game = await getGame(currentGameId);
-        console.log('gameId', currentGameId);
         if (cancelled || !game) return;
         setBoard(bitsToBoard(game.x_bits, game.o_bits));
         setCurrentPlayer(game.turn === 0 ? 'X' : 'O');
@@ -138,7 +137,7 @@ export default function PlayScreen() {
         setMyRole('X');
         setGameStarted(true);
       } else {
-        console.log('createGame returned null (no tx hash). Check paymaster logs.');
+        if (__DEV__) console.log('createGame returned null (no tx hash)')
       }
     } finally {
       setCreatingGame(false);
@@ -216,8 +215,6 @@ export default function PlayScreen() {
             : `Opponent's turn (${currentPlayer})`
           : 'Waiting for players'
         : 'Enter an address to start';
-console.log('wallet', wallet);
-console.log('account', account);
   if (!externalAddress) {
     return <AccountGate />;
   }

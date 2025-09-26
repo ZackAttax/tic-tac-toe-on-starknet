@@ -8,26 +8,21 @@ import React, {
 import * as Crypto from "expo-crypto";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
-import { toBeHex } from "ethers";
 import {
   Call,
   Account,
   constants,
   ec,
-  TypedData,
   RpcProvider,
   hash,
   CallData,
-  typedData,
 } from "starknet";
 import {
   BASE_URL,
   executeCalls,
-  formatCall,
   GaslessOptions,
   SEPOLIA_BASE_URL,
 } from "@avnu/gasless-sdk";
-import { Platform } from "react-native";
 
 export const LOCALHOST_RPC_URL =
   process.env.EXPO_PUBLIC_LOCALHOST_RPC_URL || "http://localhost:5050/rpc";
@@ -141,7 +136,6 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const hasValidTransactionHash = (response: any): boolean => {
   if (!response) return false;
-console.log("response", response);
   // Check if response has data with transactionHash
   if (response.data?.transactionHash) {
     // Check if it's a valid hash (starts with 0x and has proper length)
@@ -253,7 +247,6 @@ export const StarknetConnectorProvider: React.FC<{
   const [network, setNetwork] = useState<string>(
     process.env.EXPO_PUBLIC_STARKNET_CHAIN || "SN_SEPOLIA",
   );
-  console.log(process.env.EXPO_PUBLIC_ENABLE_STARKNET, "EXPO_STARKNET_ENABLED");
   const STARKNET_ENABLED =
     process.env.EXPO_PUBLIC_ENABLE_STARKNET === "true" ||
     process.env.EXPO_PUBLIC_ENABLE_STARKNET === "1";

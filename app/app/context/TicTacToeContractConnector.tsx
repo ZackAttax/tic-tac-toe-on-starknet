@@ -78,10 +78,6 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const createGame = useCallback(
     async (opponentAddress: string): Promise<number | null> => {
-      console.log("create_game called", {
-        opponentAddress,
-        contractAddress,
-      });
       if (!contractAddress) {
         if (__DEV__) console.error("TicTacToe contract address is not set");
         return null;
@@ -94,13 +90,11 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
       let txHash: string | null = null;
       if (wallet) {
         const execRes: any = await wallet.executeCalls([call], true);
-        console.log('execRes', execRes);
         txHash = typeof execRes === "string"
           ? execRes
           : execRes?.data?.transactionHash || execRes?.transaction_hash || execRes?.result?.result?.transactionHash || null;
       } else if (hasExternalWallet) {
         const execRes: any = await executeExternalCalls([call]);
-        console.log('execResEXTERNAL', execRes);
         txHash = typeof execRes === "string" ? execRes : execRes?.transaction_hash || execRes?.data?.transactionHash || null;
       }
       if (__DEV__) console.log("create_game txHash:", txHash);
@@ -152,10 +146,6 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
         if (__DEV__) console.warn("Failed to parse GameCreated event", e);
       }
 
-      // Fallback: brute-force scan a small range of recent game IDs to find the
-      // one matching (player_x == me && player_o == opponent). Useful if receipt
-      // event parsing fails or explorer/backend response shape changed.
-      console.log('create_game fallback failed');
       return null;
     },
     [contractAddress, provider, waitForTransaction, contract, wallet, hasExternalWallet, executeExternalCalls, externalAddress],
@@ -180,7 +170,6 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
         if (wallet) {
           // Require biometric auth per move
           const execRes: any = await wallet.executeCalls([call], true);
-          console.log("play_move executeCalls response:", execRes);
           txHash = typeof execRes === "string"
             ? execRes
             : execRes?.data?.transactionHash || execRes?.transaction_hash || execRes?.result?.result?.transactionHash || null;
