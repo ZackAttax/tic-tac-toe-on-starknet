@@ -8,7 +8,7 @@ import React, {
 } from "react";
 import { Call, Contract } from "starknet";
 import { useStarknetConnector } from "./StarknetConnector";
-import { useFocEngine } from "./FocEngineConnector";
+import { useCavos } from "./CavosConnector";
 import ticTacToeArtifact from "../abis/tic_tac_toe.json";
 
 type Game = {
@@ -45,15 +45,8 @@ export const useTicTacToe = () => {
 export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const {
-    STARKNET_ENABLED,
-    provider,
-    account,
-    invokeCalls,
-    network,
-    waitForTransaction,
-  } = useStarknetConnector();
-  const { connectContract } = useFocEngine();
+  const { provider, waitForTransaction } = useStarknetConnector();
+  const { wallet, hasExternalWallet, executeExternalCalls, externalAddress, address } = useCavos();
 
   const [contractAddress, setContractAddress] = useState<string | null>(
     process.env.EXPO_PUBLIC_TIC_TAC_TOE_CONTRACT_ADDRESS || null,
@@ -73,55 +66,41 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
 
   // Instantiate contract when we have provider and address
   useEffect(() => {
-    if (!STARKNET_ENABLED || !provider || !abi) return;
+    if (!provider || !abi) return;
     if (!contractAddress) return;
     try {
-      connectContract(contractAddress);
       const c = new Contract(abi as any, contractAddress, provider);
       setContract(c);
     } catch (e) {
       if (__DEV__) console.error("Failed to connect TicTacToe contract", e);
     }
-  }, [STARKNET_ENABLED, provider, abi, contractAddress, connectContract]);
-
-  // Connect account for write calls
-  useEffect(() => {
-    if (!STARKNET_ENABLED || !account || !contract) return;
-    try {
-      contract.connect(account);
-    } catch (e) {
-      if (__DEV__) console.error("Failed to attach account to contract", e);
-    }
-  }, [STARKNET_ENABLED, account, contract]);
+  }, [provider, abi, contractAddress]);
 
   const createGame = useCallback(
     async (opponentAddress: string): Promise<number | null> => {
       console.log("create_game called", {
         opponentAddress,
-        STARKNET_ENABLED,
         contractAddress,
       });
-      if (!STARKNET_ENABLED || !contractAddress) return null;
+      if (!contractAddress) {
+        if (__DEV__) console.error("TicTacToe contract address is not set");
+        return null;
+      }
       const call: Call = {
         contractAddress,
         entrypoint: "create_game",
         calldata: [opponentAddress],
       };
-      const res = await invokeCalls([call], 1);
-      console.log("create_game invoke response:", res);
-      if (__DEV__) {
-        console.log("create_game invoke response (raw):", res);
-        try {
-          console.log("create_game invoke keys:", Object.keys(res || {}));
-          console.log(
-            "create_game tx hash candidates:",
-            res?.data?.transactionHash,
-            res?.transaction_hash,
-            res?.data?.txHash,
-          );
-        } catch {}
+      let txHash: string | null = null;
+      if (wallet) {
+        const execRes: any = await wallet.executeCalls([call], true);
+        txHash = typeof execRes === "string"
+          ? execRes
+          : execRes?.data?.transactionHash || execRes?.transaction_hash || execRes?.result?.result?.transactionHash || null;
+      } else if (hasExternalWallet) {
+        const execRes: any = await executeExternalCalls([call]);
+        txHash = typeof execRes === "string" ? execRes : execRes?.transaction_hash || execRes?.data?.transactionHash || null;
       }
-      const txHash = (res?.data?.transactionHash || res?.transaction_hash) ?? null;
       if (__DEV__) console.log("create_game txHash:", txHash);
       if (!txHash || !provider) return null;
 
@@ -137,7 +116,7 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
         if (__DEV__) console.log("create_game receipt:", receipt);
         const normalize = (s: string | undefined | null) =>
           (s || "").toLowerCase();
-        const expectedX = normalize(account?.address || "");
+        const expectedX = normalize((address || externalAddress || ""));
         const expectedO = normalize(opponentAddress);
 
         let foundId: number | null = null;
@@ -175,7 +154,7 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
       // one matching (player_x == me && player_o == opponent). Useful if receipt
       // event parsing fails or explorer/backend response shape changed.
       try {
-        const me = (account?.address || '').toLowerCase();
+        const me = ((address || externalAddress || '')).toLowerCase();
         const opp = (opponentAddress || '').toLowerCase();
         const MAX_SCAN = 64;
         let latestId: number | null = null;
@@ -203,7 +182,7 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
 
       return null;
     },
-    [STARKNET_ENABLED, contractAddress, invokeCalls, provider, account, waitForTransaction, contract],
+    [contractAddress, provider, waitForTransaction, contract, wallet, hasExternalWallet, executeExternalCalls, externalAddress],
   );
 
   const playMove = useCallback(
@@ -212,20 +191,27 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
         console.log("play_move called", {
           gameId,
           cell,
-          STARKNET_ENABLED,
           contractAddress,
         });
-      if (!STARKNET_ENABLED || !contractAddress) return null;
+      if (!contractAddress) return null;
       try {
         const call: Call = {
           contractAddress,
           entrypoint: "play_move",
           calldata: [gameId, cell],
         };
-        const res = await invokeCalls([call], 1);
-        console.log("play_move invoke response:", res);
-        const txHash =
-          (res?.data?.transactionHash || res?.transaction_hash) ?? null;
+        let txHash: string | null = null;
+        if (wallet) {
+          // Require biometric auth per move
+          const execRes: any = await wallet.executeCalls([call], true);
+          console.log("play_move executeCalls response:", execRes);
+          txHash = typeof execRes === "string"
+            ? execRes
+            : execRes?.data?.transactionHash || execRes?.transaction_hash || execRes?.result?.result?.transactionHash || null;
+        } else if (hasExternalWallet) {
+          const execRes: any = await executeExternalCalls([call]);
+          txHash = typeof execRes === "string" ? execRes : execRes?.transaction_hash || execRes?.data?.transactionHash || null;
+        }
         if (!txHash) return null;
         try {
           await waitForTransaction(txHash);
@@ -236,17 +222,17 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
         return null;
       }
     },
-    [STARKNET_ENABLED, contractAddress, invokeCalls],
+    [contractAddress, wallet, hasExternalWallet, executeExternalCalls, waitForTransaction],
   );
 
   const loadGame = useCallback((gameId: number) => {
-    if (!STARKNET_ENABLED) return;
     setCurrentGameId(Number(gameId));
-  }, [STARKNET_ENABLED]);
+  }, []);
 
   const getGame = useCallback(
     async (gameId: number): Promise<Game | null> => {
-      if (!STARKNET_ENABLED || !contract) return null;
+      if (!contract) return null;
+      if (gameId == null || Number.isNaN(Number(gameId))) return null;
       try {
         const raw: any = await (contract as any).get_game(gameId);
         if (!raw) return null;
@@ -275,7 +261,7 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
         return null;
       }
     },
-    [STARKNET_ENABLED, contract],
+    [contract],
   );
 
   return (

@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput } from 'react-native';
 import { Text, View } from '@/components/Themed';
 import TicTacToeBoard from '@/components/TicTacToeBoard';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 import { useTicTacToe } from '@/app/context/TicTacToeContractConnector';
+import { useCavos } from '@/app/context/CavosConnector';
 import { useStarknetConnector } from '@/app/context/StarknetConnector';
 import AccountGate from '@/components/AccountGate';
 
@@ -34,13 +35,15 @@ function isBoardFull(board: CellValue[]): boolean {
 }
 
 export default function PlayScreen() {
+  const { wallet, externalAddress, address } = useCavos();
   const { account } = useStarknetConnector();
   const [opponentAddress, setOpponentAddress] = useState('');
   const [board, setBoard] = useState<CellValue[]>(Array(9).fill(null));
   const [currentPlayer, setCurrentPlayer] = useState<'X' | 'O'>('X');
   const [myRole, setMyRole] = useState<'X' | 'O' | null>(null);
   const [gameStarted, setGameStarted] = useState(false);
-  const { createGame, playMove, getGame, currentGameId, loadGame } = useTicTacToe();
+  const [creatingGame, setCreatingGame] = useState(false);
+  const { createGame, playMove, getGame, currentGameId, loadGame, contractAddress } = useTicTacToe();
   const [invitations, setInvitations] = useState<{ id: number; from: string }[]>([]);
   const [joinGameId, setJoinGameId] = useState('');
 
@@ -50,6 +53,8 @@ export default function PlayScreen() {
   const { winner, line: winningLine } = useMemo(() => calculateWinner(board), [board]);
   const isDraw = useMemo(() => !winner && isBoardFull(board), [board, winner]);
   const isMyTurn = useMemo(() => (myRole ? currentPlayer === myRole : false), [currentPlayer, myRole]);
+
+  const myAddress = (address || externalAddress || account?.address || '').toLowerCase();
 
   // Sync board periodically from on-chain state so opponent moves are reflected
   useEffect(() => {
@@ -72,7 +77,7 @@ export default function PlayScreen() {
         if (cancelled || !game) return;
         setBoard(bitsToBoard(game.x_bits, game.o_bits));
         setCurrentPlayer(game.turn === 0 ? 'X' : 'O');
-        const me = (account?.address || '').toLowerCase();
+        const me = myAddress;
         const playerX = (game.player_x || '').toLowerCase();
         const playerO = (game.player_o || '').toLowerCase();
         const role = me === playerX ? 'X' : me === playerO ? 'O' : null;
@@ -87,11 +92,12 @@ export default function PlayScreen() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [currentGameId, getGame, account]);
+  }, [currentGameId, getGame, myAddress]);
 
   // Poll for invitations (games where I am player O and game is ongoing)
   useEffect(() => {
-    if (!account) return;
+    if (!wallet && !account && !externalAddress && !address) return;
+    if (currentGameId == null) return; // don't poll invites until we have a game id
     let cancelled = false;
 
     const fetchInvites = async () => {
@@ -102,7 +108,7 @@ export default function PlayScreen() {
         for (let gid = 0; gid < MAX_SCAN; gid++) {
           const g = await getGame(gid).catch(() => null);
           if (!g) continue;
-          const me = (account.address || '').toLowerCase();
+          const me = (address || externalAddress || account?.address || '').toLowerCase();
           const px = (g.player_x || '').toLowerCase();
           const po = (g.player_o || '').toLowerCase();
           const invited = po === me && g.x_bits === 0 && g.o_bits === 0 && g.status === 0;
@@ -119,15 +125,25 @@ export default function PlayScreen() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [account, getGame]);
+  }, [wallet, account, getGame, currentGameId]);
 
   async function handleStartGame() {
-    if (!opponentAddress.trim()) return;
-    setBoard(Array(9).fill(null));
-    setCurrentPlayer('X');
-    setMyRole('X');
-    setGameStarted(true);
-    await createGame(opponentAddress);
+    if (!opponentAddress.trim() || creatingGame) return;
+    setCreatingGame(true);
+    try {
+      const gameId = await createGame(opponentAddress);
+      if (gameId != null) {
+        loadGame(gameId);
+        setBoard(Array(9).fill(null));
+        setCurrentPlayer('X');
+        setMyRole('X');
+        setGameStarted(true);
+      } else {
+        console.log('createGame returned null (no tx hash). Check paymaster logs.');
+      }
+    } finally {
+      setCreatingGame(false);
+    }
   }
 
   function handleJoinGame() {
@@ -135,7 +151,7 @@ export default function PlayScreen() {
     if (Number.isNaN(id) || id < 0) return;
     loadGame(id);
     setGameStarted(true);
-    setJoinGameId('');
+    setJoinGameId(id.toString());
   }
 
   function handleCellPress(index: number) {
@@ -169,15 +185,18 @@ export default function PlayScreen() {
     ? `Winner: ${winner}`
     : isDraw
       ? 'Draw'
-      : gameStarted
+      : creatingGame
+        ? 'Waiting for game to be created…'
+        : gameStarted
         ? myRole
           ? isMyTurn
             ? `Your turn (${myRole})`
             : `Opponent's turn (${currentPlayer})`
           : 'Waiting for players'
         : 'Enter an address to start';
-
-  if (!account) {
+console.log('wallet', wallet);
+console.log('account', account);
+  if (!externalAddress) {
     return <AccountGate />;
   }
 
@@ -188,10 +207,36 @@ export default function PlayScreen() {
     >
       <View style={styles.content}>
         <Text style={styles.title}>Tic Tac Toe</Text>
+        {!contractAddress && (
+          <View style={{ padding: 10, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth * 2, borderColor: 'rgba(255,165,0,0.6)' }}>
+            <Text style={{ fontSize: 12 }}>
+              Contract address not set. Configure EXPO_PUBLIC_TIC_TAC_TOE_CONTRACT_ADDRESS.
+            </Text>
+          </View>
+        )}
+
+        <View style={styles.walletPanel}>
+          <Text style={styles.walletTitle}>Wallets</Text>
+          {!!address && (
+            <View style={styles.walletRow}>
+              <Text style={styles.walletLabel}>Cavos</Text>
+              <Text selectable style={styles.walletValue}>{address}</Text>
+            </View>
+          )}
+          {!!externalAddress && (
+            <View style={styles.walletRow}>
+              <Text style={styles.walletLabel}>External</Text>
+              <Text selectable style={styles.walletValue}>{externalAddress}</Text>
+            </View>
+          )}
+          {!address && !externalAddress && (
+            <Text style={styles.walletValue}>No wallet connected</Text>
+          )}
+        </View>
 
         <View style={styles.addressRow}>
           <Text style={styles.label}>Your address</Text>
-          <Text selectable style={styles.addressValue}>{account.address}</Text>
+          <Text selectable style={styles.addressValue}>{wallet?.address || account?.address}</Text>
         </View>
 
         {currentGameId != null && (
@@ -222,13 +267,17 @@ export default function PlayScreen() {
           <Pressable
             accessibilityRole="button"
             onPress={handleStartGame}
-            disabled={!opponentAddress.trim()}
+            disabled={!opponentAddress.trim() || creatingGame}
             style={({ pressed }) => [
               styles.startButton,
-              { backgroundColor: tint, opacity: !opponentAddress.trim() ? 0.5 : pressed ? 0.8 : 1 },
+              { backgroundColor: tint, opacity: !opponentAddress.trim() || creatingGame ? 0.5 : pressed ? 0.8 : 1 },
             ]}
           >
-            <Text style={styles.startButtonText}>{gameStarted ? 'Restart' : 'Start Game'}</Text>
+            {creatingGame ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.startButtonText}>{gameStarted ? 'Restart' : 'Start Game'}</Text>
+            )}
           </Pressable>
         </View>
 
@@ -360,6 +409,30 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 16,
     gap: 16,
+  },
+  walletPanel: {
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth * 2,
+    borderColor: 'rgba(127,127,127,0.4)'
+  },
+  walletTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  walletRow: {
+    gap: 6,
+    marginBottom: 6,
+  },
+  walletLabel: {
+    fontSize: 12,
+    opacity: 0.75,
+  },
+  walletValue: {
+    fontSize: 12,
+    opacity: 0.9,
   },
   title: {
     fontSize: 28,

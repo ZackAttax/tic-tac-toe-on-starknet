@@ -1,71 +1,35 @@
-import React, { useMemo, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput } from 'react-native';
-import Colors from '@/constants/Colors';
-import { useColorScheme } from '@/components/useColorScheme';
+import React, { useState } from 'react';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, StyleSheet } from 'react-native';
 import { Text, View } from '@/components/Themed';
-import { useStarknetConnector } from '@/app/context/StarknetConnector';
-import { useFocEngine } from '@/app/context/FocEngineConnector';
+import { useCavos } from '@/app/context/CavosConnector';
+import { SignInWithGoogle } from 'cavos-service-native';
 
 export default function AccountGate() {
-  const colorScheme = useColorScheme() ?? 'light';
-  const tint = Colors[colorScheme].tint;
+  const { wallet, hasExternalWallet, deployExternalWallet, orgSecret, login, network, address } = useCavos();
 
-  const {
-    STARKNET_ENABLED,
-    network,
-    account,
-    generatePrivateKey, 
-    deployAccount,
-    storeKeyAndConnect,
-  } = useStarknetConnector();
-
-  const {
-    initializeAccount,
-    isUserInitializing,
-    isUsernameValid,
-    usernameValidationError,
-  } = useFocEngine();
-
-  const [username, setUsername] = useState('');
-  const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const needsUsername = STARKNET_ENABLED && network !== 'SN_DEVNET';
-  const isUsernameOk = useMemo(() => {
-    if (!needsUsername) return true;
-    if (username.trim().length === 0) return false;
-    return isUsernameValid(username.trim());
-  }, [needsUsername, username, isUsernameValid]);
+  // Cavos demo external deploy path (org secret in client for demo only)
+  const [deployingCavos, setDeployingCavos] = useState(false);
 
-  async function handleCreate() {
+  async function handleCavosDeploy() {
+    if (__DEV__) console.log('[UI] Cavos Deploy clicked', { orgSecretPresent: !!orgSecret });
     setError(null);
-    setCreating(true);
+    setDeployingCavos(true);
     try {
-      const pk = generatePrivateKey();
-      if (!pk) {
-        throw new Error('Could not generate private key');
-      }
-
-      if (!STARKNET_ENABLED || network === 'SN_DEVNET') {
-        await deployAccount(pk);
-        // Persist key for reuse across sessions
-        await storeKeyAndConnect(pk, 'tic_tac_toe');
-      } else {
-        const finalUsername = username.trim().length
-          ? username.trim()
-          : `player_${Math.random().toString(36).slice(2, 8)}`;
-        // Will deploy (via paymaster) and connect/store the key internally
-        await initializeAccount(finalUsername, [], undefined, pk, 2);
-      }
+      const res = await deployExternalWallet();
+      if (__DEV__) console.log('[UI] Cavos Deploy result', res);
+      if ((res as any)?.error) setError((res as any).error);
     } catch (e: any) {
-      const msg = typeof e?.message === 'string' ? e.message : String(e);
-      setError(msg);
+      if (__DEV__) console.error('[UI] Cavos Deploy exception', e?.message || e);
+      setError(typeof e?.message === 'string' ? e.message : String(e));
     } finally {
-      setCreating(false);
+      setDeployingCavos(false);
     }
   }
 
-  if (account) {
+  if (wallet || hasExternalWallet) {
+    if (__DEV__) console.log('[UI] AccountGate hidden', { hasWallet: !!wallet, hasExternalWallet });
     return null;
   }
 
@@ -75,51 +39,49 @@ export default function AccountGate() {
       behavior={Platform.select({ ios: 'padding', android: undefined })}
     >
       <View style={styles.card}>
-        <Text style={styles.title}>Create your Starknet account</Text>
-        <Text style={styles.subtitle}>You need an account to start a game.</Text>
-
-        {needsUsername && (
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Choose a username</Text>
-            <TextInput
-              value={username}
-              onChangeText={setUsername}
-              placeholder="e.g. player_123"
-              placeholderTextColor={Platform.select({ ios: '#999', android: '#999' })}
-              autoCapitalize="none"
-              autoCorrect={false}
-              style={[
-                styles.input,
-                {
-                  borderColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.2)',
-                  color: Colors[colorScheme].text,
-                  backgroundColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.03)',
-                },
-              ]}
-            />
-            {!isUsernameOk && (
-              <Text style={styles.validationText}>{usernameValidationError}</Text>
-            )}
-          </View>
+        <Text style={styles.title}>Create a Starknet account</Text>
+        <Text style={styles.subtitle}>Demo options below. Org secret detected: {orgSecret ? 'Yes' : 'No'}</Text>
+        {__DEV__ && (
+          <Text style={styles.subtitle}>Debug: hasWallet={String(!!wallet)} hasExternal={String(hasExternalWallet)} addr={address}</Text>
         )}
+
+        {/* Google Sign In via Cavos SDK */}
+        <SignInWithGoogle
+          appId={process.env.EXPO_PUBLIC_CAVOS_APP_ID || ''}
+          network={(network || 'sepolia') as any}
+          finalRedirectUri={process.env.EXPO_PUBLIC_CAVOS_REDIRECT_URI || 'app://callback'}
+          onSuccess={(w: any) => {
+            if (__DEV__) console.log('[UI] Google login success', { address: w?.address, network: w?.network });
+            try { login(w); } catch {}
+          }}
+          onError={(e: any) => {
+            const msg = e?.message || String(e);
+            if (__DEV__) console.error('[UI] Google login error', msg);
+            setError(msg);
+          }}
+        >
+          <Text style={styles.primaryText}>Sign in with Google</Text>
+        </SignInWithGoogle>
 
         {!!error && <Text style={styles.errorText}>{error}</Text>}
 
+        {orgSecret && (
         <Pressable
           accessibilityRole="button"
-          onPress={handleCreate}
-          disabled={creating || isUserInitializing || !isUsernameOk}
+          onPress={handleCavosDeploy}
+          disabled={deployingCavos}
           style={({ pressed }) => [
             styles.primaryButton,
-            { backgroundColor: tint, opacity: creating || isUserInitializing || !isUsernameOk ? 0.6 : pressed ? 0.8 : 1 },
+            { backgroundColor: '#34c759', opacity: deployingCavos ? 0.6 : pressed ? 0.8 : 1 },
           ]}
         >
-          {creating || isUserInitializing ? (
+          {deployingCavos ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.primaryText}>Create Account</Text>
+            <Text style={styles.primaryText}>Deploy with Cavos (demo)</Text>
           )}
         </Pressable>
+        )}
       </View>
     </KeyboardAvoidingView>
   );

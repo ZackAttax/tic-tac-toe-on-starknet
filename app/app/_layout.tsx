@@ -8,7 +8,7 @@ import 'react-native-reanimated';
 
 import { useColorScheme } from '@/components/useColorScheme';
 import { StarknetConnectorProvider } from './context/StarknetConnector';
-import { FocEngineProvider } from './context/FocEngineConnector';
+import { CavosConnectorProvider } from './context/CavosConnector';
 import { TicTacToeProvider } from './context/TicTacToeContractConnector';
 
 export {
@@ -54,14 +54,14 @@ function RootLayoutNav() {
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <StarknetConnectorProvider>
-        <FocEngineProvider>
+        <CavosConnectorProvider>
           <TicTacToeProvider>
             <Stack>
               <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
               <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
             </Stack>
           </TicTacToeProvider>
-        </FocEngineProvider>
+        </CavosConnectorProvider>
       </StarknetConnectorProvider>
     </ThemeProvider>
   );

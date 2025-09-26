@@ -7,7 +7,7 @@ import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 import { useClientOnlyValue } from '@/components/useClientOnlyValue';
 import { StarknetConnectorProvider } from '../context/StarknetConnector';
-import { FocEngineProvider } from '../context/FocEngineConnector';
+import { CavosConnectorProvider } from '../context/CavosConnector';
 import { TicTacToeProvider } from '../context/TicTacToeContractConnector';
 
 // You can explore the built-in icon families and icons on the web at https://icons.expo.fyi/
@@ -23,8 +23,8 @@ export default function TabLayout() {
 
   return (
     <StarknetConnectorProvider>
-      <FocEngineProvider>
-        <TicTacToeProvider>
+        <CavosConnectorProvider>
+          <TicTacToeProvider>
           <Tabs
             screenOptions={{
               tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
@@ -62,7 +62,7 @@ export default function TabLayout() {
           />
           </Tabs>
         </TicTacToeProvider>
-      </FocEngineProvider>
+        </CavosConnectorProvider>
     </StarknetConnectorProvider>
   );
 }
