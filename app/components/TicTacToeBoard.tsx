@@ -70,7 +70,7 @@ const styles = StyleSheet.create({
   container: {
     width: '100%',
     aspectRatio: 1,
-    maxWidth: 420,
+    maxWidth: 340,
     alignSelf: 'center',
   },
   gridRow: {
@@ -85,7 +85,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   symbol: {
-    fontSize: 48,
+    fontSize: 40,
     fontWeight: '700',
   },
 });

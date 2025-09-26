@@ -94,11 +94,13 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
       let txHash: string | null = null;
       if (wallet) {
         const execRes: any = await wallet.executeCalls([call], true);
+        console.log('execRes', execRes);
         txHash = typeof execRes === "string"
           ? execRes
           : execRes?.data?.transactionHash || execRes?.transaction_hash || execRes?.result?.result?.transactionHash || null;
       } else if (hasExternalWallet) {
         const execRes: any = await executeExternalCalls([call]);
+        console.log('execResEXTERNAL', execRes);
         txHash = typeof execRes === "string" ? execRes : execRes?.transaction_hash || execRes?.data?.transactionHash || null;
       }
       if (__DEV__) console.log("create_game txHash:", txHash);
@@ -153,33 +155,7 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
       // Fallback: brute-force scan a small range of recent game IDs to find the
       // one matching (player_x == me && player_o == opponent). Useful if receipt
       // event parsing fails or explorer/backend response shape changed.
-      try {
-        const me = ((address || externalAddress || '')).toLowerCase();
-        const opp = (opponentAddress || '').toLowerCase();
-        const MAX_SCAN = 64;
-        let latestId: number | null = null;
-        for (let gid = 0; gid < MAX_SCAN; gid++) {
-          try {
-            const g = await (contract as any).get_game(gid);
-            const toHex = (v: any) => {
-              try { const b = BigInt(v?.toString?.() ?? v); return '0x' + b.toString(16); } catch { return String(v); }
-            };
-            const px = toHex(g.player_x).toLowerCase();
-            const po = toHex(g.player_o).toLowerCase();
-            if (px === me && po === opp) latestId = gid;
-          } catch (_) {
-            // unknown_game beyond current range; continue scanning next ids
-          }
-        }
-        if (latestId !== null) {
-          if (__DEV__) console.log('create_game fallback matched gameId:', latestId);
-          setCurrentGameId(latestId);
-          return latestId;
-        }
-      } catch (e) {
-        if (__DEV__) console.warn('create_game fallback scan failed', e);
-      }
-
+      console.log('create_game fallback failed');
       return null;
     },
     [contractAddress, provider, waitForTransaction, contract, wallet, hasExternalWallet, executeExternalCalls, externalAddress],
@@ -257,7 +233,13 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
         };
         return game;
       } catch (e) {
-        if (__DEV__) console.error("get_game failed", e);
+        if (__DEV__) {
+          const msg = (e as any)?.message || String(e || '');
+          // Suppress noisy logs when the contract returns 'unknown_game'
+          if (!/unknown_game/i.test(msg)) {
+            console.error("get_game failed", e);
+          }
+        }
         return null;
       }
     },

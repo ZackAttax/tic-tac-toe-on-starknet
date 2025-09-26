@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, ScrollView } from 'react-native';
 import { Text, View } from '@/components/Themed';
 import TicTacToeBoard from '@/components/TicTacToeBoard';
 import Colors from '@/constants/Colors';
@@ -43,6 +43,7 @@ export default function PlayScreen() {
   const [myRole, setMyRole] = useState<'X' | 'O' | null>(null);
   const [gameStarted, setGameStarted] = useState(false);
   const [creatingGame, setCreatingGame] = useState(false);
+  const [fetchingGame, setFetchingGame] = useState(false);
   const { createGame, playMove, getGame, currentGameId, loadGame, contractAddress } = useTicTacToe();
   const [invitations, setInvitations] = useState<{ id: number; from: string }[]>([]);
   const [joinGameId, setJoinGameId] = useState('');
@@ -56,7 +57,7 @@ export default function PlayScreen() {
 
   const myAddress = (address || externalAddress || account?.address || '').toLowerCase();
 
-  // Sync board periodically from on-chain state so opponent moves are reflected
+  // Fetch game state once when gameId changes (no loop)
   useEffect(() => {
     if (currentGameId == null) return;
 
@@ -85,47 +86,45 @@ export default function PlayScreen() {
       } catch {}
     };
 
-    // initial fetch + interval
+    // initial fetch only
     sync();
-    const id = setInterval(sync, 1000);
     return () => {
       cancelled = true;
-      clearInterval(id);
     };
   }, [currentGameId, getGame, myAddress]);
 
   // Poll for invitations (games where I am player O and game is ongoing)
-  useEffect(() => {
-    if (!wallet && !account && !externalAddress && !address) return;
-    if (currentGameId == null) return; // don't poll invites until we have a game id
-    let cancelled = false;
+  // useEffect(() => {
+  //   if (!wallet && !account && !externalAddress && !address) return;
+  //   if (currentGameId == null) return; // don't poll invites until we have a game id
+  //   let cancelled = false;
 
-    const fetchInvites = async () => {
-      try {
-        // Heuristic scan of recent gameIds. In production, index events off-chain or store ids locally.
-        const MAX_SCAN = 25;
-        const found: { id: number; from: string }[] = [];
-        for (let gid = 0; gid < MAX_SCAN; gid++) {
-          const g = await getGame(gid).catch(() => null);
-          if (!g) continue;
-          const me = (address || externalAddress || account?.address || '').toLowerCase();
-          const px = (g.player_x || '').toLowerCase();
-          const po = (g.player_o || '').toLowerCase();
-          const invited = po === me && g.x_bits === 0 && g.o_bits === 0 && g.status === 0;
-          if (invited) {
-            found.push({ id: gid, from: px });
-          }
-        }
-        if (!cancelled) setInvitations(found);
-      } catch {}
-    };
-    fetchInvites();
-    const id = setInterval(fetchInvites, 4000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [wallet, account, getGame, currentGameId]);
+  //   const fetchInvites = async () => {
+  //     try {
+  //       // Heuristic scan of recent gameIds. In production, index events off-chain or store ids locally.
+  //       const MAX_SCAN = 25;
+  //       const found: { id: number; from: string }[] = [];
+  //       for (let gid = 0; gid < MAX_SCAN; gid++) {
+  //         const g = await getGame(gid).catch(() => null);
+  //         if (!g) continue;
+  //         const me = (address || externalAddress || account?.address || '').toLowerCase();
+  //         const px = (g.player_x || '').toLowerCase();
+  //         const po = (g.player_o || '').toLowerCase();
+  //         const invited = po === me && g.x_bits === 0 && g.o_bits === 0 && g.status === 0;
+  //         if (invited) {
+  //           found.push({ id: gid, from: px });
+  //         }
+  //       }
+  //       if (!cancelled) setInvitations(found);
+  //     } catch {}
+  //   };
+  //   fetchInvites();
+  //   const id = setInterval(fetchInvites, 4000);
+  //   return () => {
+  //     cancelled = true;
+  //     clearInterval(id);
+  //   };
+  // }, [wallet, account, getGame, currentGameId]);
 
   async function handleStartGame() {
     if (!opponentAddress.trim() || creatingGame) return;
@@ -181,6 +180,29 @@ export default function PlayScreen() {
     setCurrentPlayer('X');
   }
 
+  async function handleRefreshGame() {
+    if (currentGameId == null || fetchingGame) return;
+    setFetchingGame(true);
+    try {
+      const game = await getGame(currentGameId);
+      if (!game) return;
+      const arr: CellValue[] = Array(9).fill(null);
+      for (let i = 0; i < 9; i++) {
+        if ((game.x_bits & (1 << i)) !== 0) arr[i] = 'X';
+        else if ((game.o_bits & (1 << i)) !== 0) arr[i] = 'O';
+      }
+      setBoard(arr);
+      setCurrentPlayer(game.turn === 0 ? 'X' : 'O');
+      const me = myAddress;
+      const playerX = (game.player_x || '').toLowerCase();
+      const playerO = (game.player_o || '').toLowerCase();
+      const role = me === playerX ? 'X' : me === playerO ? 'O' : null;
+      setMyRole(role);
+    } finally {
+      setFetchingGame(false);
+    }
+  }
+
   const statusText = winner
     ? `Winner: ${winner}`
     : isDraw
@@ -205,8 +227,12 @@ console.log('account', account);
       style={styles.container}
       behavior={Platform.select({ ios: 'padding', android: undefined })}
     >
-      <View style={styles.content}>
-        <Text style={styles.title}>Tic Tac Toe</Text>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={[styles.content, { paddingBottom: 48 }]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator
+      >
         {!contractAddress && (
           <View style={{ padding: 10, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth * 2, borderColor: 'rgba(255,165,0,0.6)' }}>
             <Text style={{ fontSize: 12 }}>
@@ -232,11 +258,6 @@ console.log('account', account);
           {!address && !externalAddress && (
             <Text style={styles.walletValue}>No wallet connected</Text>
           )}
-        </View>
-
-        <View style={styles.addressRow}>
-          <Text style={styles.label}>Your address</Text>
-          <Text selectable style={styles.addressValue}>{wallet?.address || account?.address}</Text>
         </View>
 
         {currentGameId != null && (
@@ -339,9 +360,22 @@ console.log('account', account);
         <View style={styles.statusRow}>
           <Text style={styles.status}>{statusText}</Text>
           {gameStarted && (
-            <Pressable onPress={handleReset} style={({ pressed }) => [styles.resetButton, { opacity: pressed ? 0.7 : 1 }]}>
-              <Text style={styles.resetText}>Reset Board</Text>
-            </Pressable>
+            <>
+              <Pressable
+                onPress={handleRefreshGame}
+                disabled={fetchingGame || currentGameId == null}
+                style={({ pressed }) => [styles.resetButton, { opacity: (fetchingGame || currentGameId == null) ? 0.5 : (pressed ? 0.7 : 1) }]}
+              >
+                {fetchingGame ? (
+                  <ActivityIndicator />
+                ) : (
+                  <Text style={styles.resetText}>Get Game</Text>
+                )}
+              </Pressable>
+              <Pressable onPress={handleReset} style={({ pressed }) => [styles.resetButton, { opacity: pressed ? 0.7 : 1 }]}>
+                <Text style={styles.resetText}>Reset Board</Text>
+              </Pressable>
+            </>
           )}
         </View>
 
@@ -358,7 +392,8 @@ console.log('account', account);
             <Text style={styles.newGameText}>New Opponent</Text>
           </Pressable>
         )}
-      </View>
+        
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
@@ -487,6 +522,7 @@ const styles = StyleSheet.create({
   },
   board: {
     marginTop: 8,
+    marginBottom: 96,
   },
   newGameButton: {
     marginTop: 16,
