@@ -92,39 +92,6 @@ export default function PlayScreen() {
     };
   }, [currentGameId, getGame, myAddress]);
 
-  // Poll for invitations (games where I am player O and game is ongoing)
-  // useEffect(() => {
-  //   if (!wallet && !account && !externalAddress && !address) return;
-  //   if (currentGameId == null) return; // don't poll invites until we have a game id
-  //   let cancelled = false;
-
-  //   const fetchInvites = async () => {
-  //     try {
-  //       // Heuristic scan of recent gameIds. In production, index events off-chain or store ids locally.
-  //       const MAX_SCAN = 25;
-  //       const found: { id: number; from: string }[] = [];
-  //       for (let gid = 0; gid < MAX_SCAN; gid++) {
-  //         const g = await getGame(gid).catch(() => null);
-  //         if (!g) continue;
-  //         const me = (address || externalAddress || account?.address || '').toLowerCase();
-  //         const px = (g.player_x || '').toLowerCase();
-  //         const po = (g.player_o || '').toLowerCase();
-  //         const invited = po === me && g.x_bits === 0 && g.o_bits === 0 && g.status === 0;
-  //         if (invited) {
-  //           found.push({ id: gid, from: px });
-  //         }
-  //       }
-  //       if (!cancelled) setInvitations(found);
-  //     } catch {}
-  //   };
-  //   fetchInvites();
-  //   const id = setInterval(fetchInvites, 4000);
-  //   return () => {
-  //     cancelled = true;
-  //     clearInterval(id);
-  //   };
-  // }, [wallet, account, getGame, currentGameId]);
-
   async function handleStartGame() {
     if (!opponentAddress.trim() || creatingGame) return;
     setCreatingGame(true);
@@ -137,7 +104,7 @@ export default function PlayScreen() {
         setMyRole('X');
         setGameStarted(true);
       } else {
-        if (__DEV__) console.log('createGame returned null (no tx hash)')
+        if (__DEV__) console.log('createGame returned null (no tx hash)');
       }
     } finally {
       setCreatingGame(false);
@@ -226,7 +193,7 @@ export default function PlayScreen() {
     >
       <ScrollView
         style={{ flex: 1 }}
-        contentContainerStyle={[styles.content, { paddingBottom: 48 }]}
+        contentContainerStyle={[styles.content]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator
       >
@@ -443,7 +410,7 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   walletPanel: {
-    marginTop: 8,
+    marginTop: 50,
     padding: 10,
     borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth * 2,
