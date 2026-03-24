@@ -1,5 +1,31 @@
 # tic-tac-toe-on-starknet
 
+## App setup
+
+### App environment variables
+
+Create `app/.env` (or copy from `app/env.example`) and define:
+
+- `EXPO_PUBLIC_ENABLE_STARKNET` (required): Set to `true` or `1`
+- `EXPO_PUBLIC_TIC_TAC_TOE_CONTRACT_ADDRESS` (required): Deployed TicTacToe contract address
+- `EXPO_PUBLIC_STARKNET_NETWORK` (required): `SN_SEPOLIA` or `SN_MAIN`
+- `EXPO_PUBLIC_ALCHEMY_API_KEY` (recommended): Alchemy key used to construct default RPC URLs
+- `EXPO_PUBLIC_SEPOLIA_RPC_URL` (recommended): RPC endpoint for `SN_SEPOLIA`
+- `EXPO_PUBLIC_MAINNET_RPC_URL` (recommended): RPC endpoint for `SN_MAIN`
+- `EXPO_PUBLIC_AVNU_API_KEY` (optional): API key for AVNU paymaster calls in `StarknetConnector`
+
+Example `app/.env`:
+
+```bash
+EXPO_PUBLIC_ENABLE_STARKNET=true
+EXPO_PUBLIC_TIC_TAC_TOE_CONTRACT_ADDRESS=0x1234...
+EXPO_PUBLIC_STARKNET_NETWORK=SN_SEPOLIA
+EXPO_PUBLIC_ALCHEMY_API_KEY=<ALCHEMY_API_KEY>
+EXPO_PUBLIC_SEPOLIA_RPC_URL=https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/<ALCHEMY_API_KEY>
+EXPO_PUBLIC_MAINNET_RPC_URL=https://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_10/<ALCHEMY_API_KEY>
+EXPO_PUBLIC_AVNU_API_KEY=
+```
+
 ## Deploy to Sepolia
 
 This project includes a helper script to build, declare, and deploy the contract to Starknet Sepolia.
@@ -29,8 +55,8 @@ Example `.env` (recommended):
 STARKNET_KEYSTORE=/Users/you/.starkli/sepolia/deployer_keystore.json
 STARKNET_ACCOUNT=/Users/you/.starkli/sepolia/deployer_account.json
 STARKNET_NETWORK=sepolia
-# Use a v0_8-compatible endpoint to avoid fee-estimation incompatibilities
-STARKNET_RPC=https://starknet-sepolia.public.blastapi.io/rpc/v0_8
+# Use a compatible Alchemy RPC (v0_10 or v0_9)
+STARKNET_RPC=https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/<ALCHEMY_API_KEY>
 ```
 
 ### Run the deploy script
@@ -63,6 +89,6 @@ starkli --rpc "$STARKNET_RPC" class-hash-at 0xDEADBEEF...
 ```
 
 ### Troubleshooting
-- JSON-RPC spec mismatch (e.g. v0_7 vs v0_8): use a v0_8-compatible RPC such as `https://starknet-sepolia.public.blastapi.io/rpc/v0_8`.
+- JSON-RPC spec mismatch (for example v0_9 vs v0_10): use a compatible Alchemy endpoint such as `https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/<ALCHEMY_API_KEY>` (or `.../v0_9/<ALCHEMY_API_KEY>`).
 - “Failed to create Felt from string”: ensure the class hash is a valid lowercase hex with `0x` prefix. The script also recomputes/sanitizes it automatically.
 - `command not found: starkli`: install Starkli and re-open your shell.

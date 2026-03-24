@@ -1,18 +1,38 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, ScrollView } from 'react-native';
-import { Text, View } from '@/components/Themed';
-import TicTacToeBoard from '@/components/TicTacToeBoard';
-import Colors from '@/constants/Colors';
-import { useColorScheme } from '@/components/useColorScheme';
-import { useTicTacToe } from '@/app/context/TicTacToeContractConnector';
-import { useCavos } from '@/app/context/CavosConnector';
-import { useStarknetConnector } from '@/app/context/StarknetConnector';
-import AccountGate from '@/components/AccountGate';
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  StyleSheet,
+  TextInput,
+  ScrollView,
+} from "react-native";
+import { Text, View } from "@/components/Themed";
+import TicTacToeBoard from "@/components/TicTacToeBoard";
+import Colors from "@/constants/Colors";
+import { useColorScheme } from "@/components/useColorScheme";
+import {
+  type GameId,
+  useTicTacToe,
+} from "@/app/context/TicTacToeContractConnector";
+import { useStarknetConnector } from "@/app/context/StarknetConnector";
+import AccountGate from "@/components/AccountGate";
+import { normalizeAddress } from "@/utils/address";
 
-type CellValue = 'X' | 'O' | null;
+type CellValue = "X" | "O" | null;
+type PendingMove = {
+  gameId: GameId;
+  cell: number;
+  symbol: "X" | "O";
+  isPending: boolean;
+};
 
-function calculateWinner(board: CellValue[]): { winner: 'X' | 'O' | null; line: number[] | null } {
-  const lines = [
+function calculateWinner(board: CellValue[]): {
+  winner: "X" | "O" | null;
+  line: number[] | null;
+} {
+  const lines: ReadonlyArray<readonly [number, number, number]> = [
     [0, 1, 2],
     [3, 4, 5],
     [6, 7, 8],
@@ -23,8 +43,9 @@ function calculateWinner(board: CellValue[]): { winner: 'X' | 'O' | null; line: 
     [2, 4, 6],
   ];
   for (const [a, b, c] of lines) {
-    if (board[a] && board[a] === board[b] && board[a] === board[c]) {
-      return { winner: board[a], line: [a, b, c] };
+    const candidate = board[a];
+    if (candidate && candidate === board[b] && candidate === board[c]) {
+      return { winner: candidate, line: [a, b, c] };
     }
   }
   return { winner: null, line: null };
@@ -34,63 +55,172 @@ function isBoardFull(board: CellValue[]): boolean {
   return board.every((v) => v !== null);
 }
 
+function bitsToBoard(xBits: number, oBits: number): CellValue[] {
+  const arr: CellValue[] = Array(9).fill(null);
+  for (let i = 0; i < 9; i++) {
+    if ((xBits & (1 << i)) !== 0) arr[i] = "X";
+    else if ((oBits & (1 << i)) !== 0) arr[i] = "O";
+  }
+  return arr;
+}
+
 export default function PlayScreen() {
-  const { wallet, externalAddress, address } = useCavos();
-  const { account } = useStarknetConnector();
-  const [opponentAddress, setOpponentAddress] = useState('');
+  const { account, disconnectAccount, waitForTransaction } =
+    useStarknetConnector();
+  const [opponentAddress, setOpponentAddress] = useState("");
   const [board, setBoard] = useState<CellValue[]>(Array(9).fill(null));
-  const [currentPlayer, setCurrentPlayer] = useState<'X' | 'O'>('X');
-  const [myRole, setMyRole] = useState<'X' | 'O' | null>(null);
+  const [currentPlayer, setCurrentPlayer] = useState<"X" | "O">("X");
+  const [myRole, setMyRole] = useState<"X" | "O" | null>(null);
   const [gameStarted, setGameStarted] = useState(false);
   const [creatingGame, setCreatingGame] = useState(false);
-  const [fetchingGame, setFetchingGame] = useState(false);
-  const { createGame, playMove, getGame, currentGameId, loadGame, contractAddress } = useTicTacToe();
-  const [invitations, setInvitations] = useState<{ id: number; from: string }[]>([]);
-  const [joinGameId, setJoinGameId] = useState('');
+  const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
+  const {
+    createGame,
+    playMove,
+    getGame,
+    currentGameId,
+    loadGame,
+    clearGame,
+    contractAddress,
+  } = useTicTacToe();
+  const invitations: { id: GameId; from: string }[] = [];
+  const [joinGameId, setJoinGameId] = useState("");
 
-  const colorScheme = useColorScheme() ?? 'light';
+  const colorScheme = useColorScheme() ?? "light";
   const tint = Colors[colorScheme].tint;
 
-  const { winner, line: winningLine } = useMemo(() => calculateWinner(board), [board]);
+  const boardWithPendingMove = useMemo(() => {
+    if (!pendingMove || pendingMove.gameId !== currentGameId) {
+      return board;
+    }
+    if (board[pendingMove.cell] === pendingMove.symbol) {
+      return board;
+    }
+    const nextBoard = board.slice();
+    nextBoard[pendingMove.cell] = pendingMove.symbol;
+    return nextBoard;
+  }, [board, currentGameId, pendingMove]);
+
+  const { winner, line: winningLine } = useMemo(
+    () => calculateWinner(board),
+    [board]
+  );
   const isDraw = useMemo(() => !winner && isBoardFull(board), [board, winner]);
-  const isMyTurn = useMemo(() => (myRole ? currentPlayer === myRole : false), [currentPlayer, myRole]);
+  const isMyTurn = useMemo(
+    () => (myRole ? currentPlayer === myRole : false),
+    [currentPlayer, myRole]
+  );
 
-  const myAddress = (address || externalAddress || account?.address || '').toLowerCase();
+  const myAddress = useMemo(
+    () => normalizeAddress(account?.address || ""),
+    [account?.address]
+  );
+  const activePendingMove =
+    pendingMove?.gameId === currentGameId ? pendingMove : null;
 
-  // Fetch game state once when gameId changes (no loop)
+  const syncGame = useCallback(
+    async (gameId: GameId): Promise<boolean> => {
+      const game = await getGame(gameId);
+      if (!game) {
+        return false;
+      }
+
+      const nextBoard = bitsToBoard(game.x_bits, game.o_bits);
+      setBoard(nextBoard);
+      setCurrentPlayer(game.turn === 0 ? "X" : "O");
+
+      const me = myAddress;
+      const playerX = normalizeAddress(game.player_x || "");
+      const playerO = normalizeAddress(game.player_o || "");
+      const role = me === playerX ? "X" : me === playerO ? "O" : null;
+      setMyRole(role);
+
+      setPendingMove((current) => {
+        if (!current || current.gameId !== gameId) {
+          return current;
+        }
+        return nextBoard[current.cell] === current.symbol ? null : current;
+      });
+
+      return true;
+    },
+    [getGame, myAddress]
+  );
+
+  const submitMove = useCallback(
+    async (gameId: GameId, cell: number, symbol: "X" | "O") => {
+      const isCurrentMove = (current: PendingMove | null): boolean =>
+        current?.gameId === gameId &&
+        current.cell === cell &&
+        current.symbol === symbol;
+
+      const clearIfCurrent = () =>
+        setPendingMove((current) => (isCurrentMove(current) ? null : current));
+
+      const txHash = await playMove(gameId, cell);
+      if (!txHash) {
+        clearIfCurrent();
+        return;
+      }
+
+      try {
+        const txResult = await waitForTransaction(txHash);
+        if (!txResult.success) {
+          if (__DEV__ && txResult.reverted) {
+            console.warn("play_move transaction reverted", txResult.receipt);
+          }
+          clearIfCurrent();
+          await syncGame(gameId);
+          return;
+        }
+
+        setPendingMove((current) =>
+          isCurrentMove(current) ? { ...current, isPending: false } : current
+        );
+        await syncGame(gameId);
+      } catch (waitError) {
+        if (__DEV__) {
+          console.warn("Failed waiting for play_move confirmation", waitError);
+        }
+        clearIfCurrent();
+        try {
+          await syncGame(gameId);
+        } catch {
+          // Polling will retry if the immediate sync attempt fails.
+        }
+      }
+    },
+    [playMove, syncGame, waitForTransaction]
+  );
+
+  // Poll game state while a game is selected.
   useEffect(() => {
     if (currentGameId == null) return;
 
-    const bitsToBoard = (xBits: number, oBits: number): CellValue[] => {
-      const arr: CellValue[] = Array(9).fill(null);
-      for (let i = 0; i < 9; i++) {
-        if ((xBits & (1 << i)) !== 0) arr[i] = 'X';
-        else if ((oBits & (1 << i)) !== 0) arr[i] = 'O';
-      }
-      return arr;
-    };
-
     let cancelled = false;
+    let inFlight = false;
     const sync = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
       try {
-        const game = await getGame(currentGameId);
-        if (cancelled || !game) return;
-        setBoard(bitsToBoard(game.x_bits, game.o_bits));
-        setCurrentPlayer(game.turn === 0 ? 'X' : 'O');
-        const me = myAddress;
-        const playerX = (game.player_x || '').toLowerCase();
-        const playerO = (game.player_o || '').toLowerCase();
-        const role = me === playerX ? 'X' : me === playerO ? 'O' : null;
-        setMyRole(role);
-      } catch {}
+        await syncGame(currentGameId);
+      } catch {
+        // Ignore polling errors and try again on next interval.
+      } finally {
+        inFlight = false;
+      }
     };
 
-    // initial fetch only
-    sync();
+    void sync();
+    const intervalId = setInterval(() => {
+      void sync();
+    }, 5000);
+
     return () => {
       cancelled = true;
+      clearInterval(intervalId);
     };
-  }, [currentGameId, getGame, myAddress]);
+  }, [currentGameId, syncGame]);
 
   async function handleStartGame() {
     if (!opponentAddress.trim() || creatingGame) return;
@@ -100,96 +230,93 @@ export default function PlayScreen() {
       if (gameId != null) {
         loadGame(gameId);
         setBoard(Array(9).fill(null));
-        setCurrentPlayer('X');
-        setMyRole('X');
+        setCurrentPlayer("X");
+        setMyRole("X");
+        setPendingMove(null);
         setGameStarted(true);
       } else {
-        if (__DEV__) console.log('createGame returned null (no tx hash)');
+        if (__DEV__) console.log("createGame returned null (no tx hash)");
       }
     } finally {
       setCreatingGame(false);
     }
   }
 
-  function handleJoinGame() {
-    const id = parseInt(joinGameId.trim(), 10);
-    if (Number.isNaN(id) || id < 0) return;
+  async function handleJoinGame() {
+    const id = joinGameId.trim();
+    if (!/^[0-9]+$/.test(id)) return;
+
+    try {
+      const didLoad = await syncGame(id);
+      if (!didLoad) {
+        return;
+      }
+    } catch (error) {
+      if (__DEV__) {
+        console.warn("Failed to load joined game", error);
+      }
+      return;
+    }
+
     loadGame(id);
+    setPendingMove(null);
     setGameStarted(true);
-    setJoinGameId(id.toString());
+    setJoinGameId("");
   }
 
   function handleCellPress(index: number) {
-    if (!gameStarted || winner) return;
-    if (__DEV__) console.log('cell pressed', index, { currentGameId, isMyTurn });
-    setBoard((prev) => {
-      if (index == null || prev[index] !== null) return prev;
-      const next = prev.slice();
-      next[index] = currentPlayer;
-      return next;
-    });
-    setCurrentPlayer((p) => (p === 'X' ? 'O' : 'X'));
-    if (currentGameId != null) {
-      playMove(currentGameId, index);
+    if (
+      !gameStarted ||
+      winner ||
+      currentGameId == null ||
+      !isMyTurn ||
+      activePendingMove
+    ) {
+      return;
     }
-  }
-
-  function handleReset() {
-    setBoard(Array(9).fill(null));
-    setCurrentPlayer('X');
+    if (__DEV__)
+      console.log("cell pressed", index, { currentGameId, isMyTurn });
+    if (board[index] !== null) return;
+    setPendingMove({
+      gameId: currentGameId,
+      cell: index,
+      symbol: currentPlayer,
+      isPending: true,
+    });
+    void submitMove(currentGameId, index, currentPlayer);
   }
 
   function handleNewGame() {
-    setOpponentAddress('');
+    clearGame();
+    setOpponentAddress("");
     setGameStarted(false);
     setBoard(Array(9).fill(null));
-    setCurrentPlayer('X');
+    setCurrentPlayer("X");
+    setMyRole(null);
+    setPendingMove(null);
   }
 
-  async function handleRefreshGame() {
-    if (currentGameId == null || fetchingGame) return;
-    setFetchingGame(true);
-    try {
-      const game = await getGame(currentGameId);
-      if (!game) return;
-      const arr: CellValue[] = Array(9).fill(null);
-      for (let i = 0; i < 9; i++) {
-        if ((game.x_bits & (1 << i)) !== 0) arr[i] = 'X';
-        else if ((game.o_bits & (1 << i)) !== 0) arr[i] = 'O';
-      }
-      setBoard(arr);
-      setCurrentPlayer(game.turn === 0 ? 'X' : 'O');
-      const me = myAddress;
-      const playerX = (game.player_x || '').toLowerCase();
-      const playerO = (game.player_o || '').toLowerCase();
-      const role = me === playerX ? 'X' : me === playerO ? 'O' : null;
-      setMyRole(role);
-    } finally {
-      setFetchingGame(false);
-    }
+  function getStatusText(): string {
+    if (creatingGame) return "Waiting for game to be created…";
+    if (activePendingMove?.isPending) return "Waiting for move confirmation…";
+    if (activePendingMove) return "Move confirmed. Syncing board…";
+    if (winner) return `Winner: ${winner}`;
+    if (isDraw) return "Draw";
+    if (!gameStarted) return "Enter an address to start";
+    if (!myRole) return "Waiting for players";
+    return isMyTurn
+      ? `Your turn (${myRole})`
+      : `Opponent's turn (${currentPlayer})`;
   }
-
-  const statusText = winner
-    ? `Winner: ${winner}`
-    : isDraw
-      ? 'Draw'
-      : creatingGame
-        ? 'Waiting for game to be created…'
-        : gameStarted
-        ? myRole
-          ? isMyTurn
-            ? `Your turn (${myRole})`
-            : `Opponent's turn (${currentPlayer})`
-          : 'Waiting for players'
-        : 'Enter an address to start';
-  if (!externalAddress) {
+  const statusText = getStatusText();
+  if (!account?.address) {
     return <AccountGate />;
   }
 
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.select({ ios: 'padding', android: undefined })}
+      behavior={Platform.select({ ios: "padding", android: undefined })}
     >
       <ScrollView
         style={{ flex: 1 }}
@@ -198,28 +325,42 @@ export default function PlayScreen() {
         showsVerticalScrollIndicator
       >
         {!contractAddress && (
-          <View style={{ padding: 10, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth * 2, borderColor: 'rgba(255,165,0,0.6)' }}>
+          <View
+            style={{
+              padding: 10,
+              borderRadius: 8,
+              borderWidth: StyleSheet.hairlineWidth * 2,
+              borderColor: "rgba(255,165,0,0.6)",
+            }}
+          >
             <Text style={{ fontSize: 12 }}>
-              Contract address not set. Configure EXPO_PUBLIC_TIC_TAC_TOE_CONTRACT_ADDRESS.
+              Contract address not set. Configure
+              EXPO_PUBLIC_TIC_TAC_TOE_CONTRACT_ADDRESS.
             </Text>
           </View>
         )}
 
         <View style={styles.walletPanel}>
           <Text style={styles.walletTitle}>Wallets</Text>
-          {!!address && (
-            <View style={styles.walletRow}>
-              <Text style={styles.walletLabel}>Cavos</Text>
-              <Text selectable style={styles.walletValue}>{address}</Text>
-            </View>
-          )}
-          {!!externalAddress && (
-            <View style={styles.walletRow}>
-              <Text style={styles.walletLabel}>External</Text>
-              <Text selectable style={styles.walletValue}>{externalAddress}</Text>
-            </View>
-          )}
-          {!address && !externalAddress && (
+          {account?.address ? (
+            <>
+              <View style={styles.walletRow}>
+                <Text style={styles.walletLabel}>Connected</Text>
+                <Text selectable style={styles.walletValue}>
+                  {account.address}
+                </Text>
+              </View>
+              <Pressable
+                onPress={disconnectAccount}
+                style={({ pressed }) => [
+                  styles.disconnectButton,
+                  { opacity: pressed ? 0.8 : 1 },
+                ]}
+              >
+                <Text style={styles.disconnectText}>Disconnect</Text>
+              </Pressable>
+            </>
+          ) : (
             <Text style={styles.walletValue}>No wallet connected</Text>
           )}
         </View>
@@ -227,7 +368,9 @@ export default function PlayScreen() {
         {currentGameId != null && (
           <View style={styles.gameIdRow}>
             <Text style={styles.label}>Game ID</Text>
-            <Text selectable style={styles.gameIdValue}>{String(currentGameId)}</Text>
+            <Text selectable style={styles.gameIdValue}>
+              {String(currentGameId)}
+            </Text>
           </View>
         )}
 
@@ -237,15 +380,21 @@ export default function PlayScreen() {
             value={opponentAddress}
             onChangeText={setOpponentAddress}
             placeholder="0x..."
-            placeholderTextColor={Platform.select({ ios: '#999', android: '#999' })}
+            placeholderTextColor="#999"
             autoCapitalize="none"
             autoCorrect={false}
             style={[
               styles.input,
               {
-                borderColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.2)',
+                borderColor:
+                  colorScheme === "dark"
+                    ? "rgba(255,255,255,0.25)"
+                    : "rgba(0,0,0,0.2)",
                 color: Colors[colorScheme].text,
-                backgroundColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.03)',
+                backgroundColor:
+                  colorScheme === "dark"
+                    ? "rgba(255,255,255,0.06)"
+                    : "rgba(0,0,0,0.03)",
               },
             ]}
           />
@@ -255,13 +404,23 @@ export default function PlayScreen() {
             disabled={!opponentAddress.trim() || creatingGame}
             style={({ pressed }) => [
               styles.startButton,
-              { backgroundColor: tint, opacity: !opponentAddress.trim() || creatingGame ? 0.5 : pressed ? 0.8 : 1 },
+              {
+                backgroundColor: tint,
+                opacity:
+                  !opponentAddress.trim() || creatingGame
+                    ? 0.5
+                    : pressed
+                      ? 0.8
+                      : 1,
+              },
             ]}
           >
             {creatingGame ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.startButtonText}>{gameStarted ? 'Restart' : 'Start Game'}</Text>
+              <Text style={styles.startButtonText}>
+                {gameStarted ? "Restart" : "Start Game"}
+              </Text>
             )}
           </Pressable>
         </View>
@@ -272,15 +431,21 @@ export default function PlayScreen() {
             value={joinGameId}
             onChangeText={setJoinGameId}
             placeholder="e.g., 3"
-            placeholderTextColor={Platform.select({ ios: '#999', android: '#999' })}
+            placeholderTextColor="#999"
             keyboardType="number-pad"
             returnKeyType="done"
             style={[
               styles.input,
               {
-                borderColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.2)',
+                borderColor:
+                  colorScheme === "dark"
+                    ? "rgba(255,255,255,0.25)"
+                    : "rgba(0,0,0,0.2)",
                 color: Colors[colorScheme].text,
-                backgroundColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.03)',
+                backgroundColor:
+                  colorScheme === "dark"
+                    ? "rgba(255,255,255,0.06)"
+                    : "rgba(0,0,0,0.03)",
               },
             ]}
           />
@@ -290,7 +455,14 @@ export default function PlayScreen() {
             disabled={!/^[0-9]+$/.test(joinGameId.trim())}
             style={({ pressed }) => [
               styles.startButton,
-              { backgroundColor: tint, opacity: !/^[0-9]+$/.test(joinGameId.trim()) ? 0.5 : pressed ? 0.8 : 1 },
+              {
+                backgroundColor: tint,
+                opacity: !/^[0-9]+$/.test(joinGameId.trim())
+                  ? 0.5
+                  : pressed
+                    ? 0.8
+                    : 1,
+              },
             ]}
           >
             <Text style={styles.startButtonText}>Join Game</Text>
@@ -304,7 +476,9 @@ export default function PlayScreen() {
               <View key={inv.id} style={styles.inviteRow}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.inviteText}>Game #{inv.id} from</Text>
-                  <Text selectable numberOfLines={1} style={styles.inviteFrom}>{inv.from}</Text>
+                  <Text selectable numberOfLines={1} style={styles.inviteFrom}>
+                    {inv.from}
+                  </Text>
                 </View>
                 <Pressable
                   accessibilityRole="button"
@@ -312,7 +486,10 @@ export default function PlayScreen() {
                     loadGame(inv.id);
                     setGameStarted(true);
                   }}
-                  style={({ pressed }) => [styles.acceptButton, { opacity: pressed ? 0.8 : 1 }]}
+                  style={({ pressed }) => [
+                    styles.acceptButton,
+                    { opacity: pressed ? 0.8 : 1 },
+                  ]}
                 >
                   <Text style={styles.acceptText}>Accept</Text>
                 </Pressable>
@@ -322,41 +499,38 @@ export default function PlayScreen() {
         )}
 
         <View style={styles.statusRow}>
-          <Text style={styles.status}>{statusText}</Text>
-          {gameStarted && (
-            <>
-              <Pressable
-                onPress={handleRefreshGame}
-                disabled={fetchingGame || currentGameId == null}
-                style={({ pressed }) => [styles.resetButton, { opacity: (fetchingGame || currentGameId == null) ? 0.5 : (pressed ? 0.7 : 1) }]}
-              >
-                {fetchingGame ? (
-                  <ActivityIndicator />
-                ) : (
-                  <Text style={styles.resetText}>Get Game</Text>
-                )}
-              </Pressable>
-              <Pressable onPress={handleReset} style={({ pressed }) => [styles.resetButton, { opacity: pressed ? 0.7 : 1 }]}>
-                <Text style={styles.resetText}>Reset Board</Text>
-              </Pressable>
-            </>
-          )}
+          <View style={styles.statusContent}>
+            <Text style={styles.status}>{statusText}</Text>
+            {activePendingMove?.isPending ? (
+              <ActivityIndicator color={tint} />
+            ) : null}
+          </View>
         </View>
 
         <TicTacToeBoard
-          board={board}
+          board={boardWithPendingMove}
           onCellPress={handleCellPress}
-          disabled={!gameStarted || !!winner || !isMyTurn}
-          winningLine={winningLine ?? undefined}
+          disabled={
+            !gameStarted || !!winner || !isMyTurn || !!activePendingMove
+          }
+          winningLine={winningLine}
+          pendingCellIndex={
+            activePendingMove?.isPending ? activePendingMove.cell : null
+          }
           style={styles.board}
         />
 
         {gameStarted && (
-          <Pressable onPress={handleNewGame} style={({ pressed }) => [styles.newGameButton, { opacity: pressed ? 0.8 : 1 }]}>
+          <Pressable
+            onPress={handleNewGame}
+            style={({ pressed }) => [
+              styles.newGameButton,
+              { opacity: pressed ? 0.8 : 1 },
+            ]}
+          >
             <Text style={styles.newGameText}>New Opponent</Text>
           </Pressable>
         )}
-        
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -371,16 +545,16 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth * 2,
-    borderColor: 'rgba(127,127,127,0.4)'
+    borderColor: "rgba(127,127,127,0.4)",
   },
   inviteTitle: {
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: "700",
     marginBottom: 8,
   },
   inviteRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 12,
     marginBottom: 8,
   },
@@ -396,13 +570,13 @@ const styles = StyleSheet.create({
     height: 36,
     paddingHorizontal: 14,
     borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#34c759',
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#34c759",
   },
   acceptText: {
-    color: '#fff',
-    fontWeight: '700',
+    color: "#fff",
+    fontWeight: "700",
   },
   content: {
     flex: 1,
@@ -414,16 +588,28 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth * 2,
-    borderColor: 'rgba(127,127,127,0.4)'
+    borderColor: "rgba(127,127,127,0.4)",
   },
   walletTitle: {
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: "700",
     marginBottom: 6,
   },
   walletRow: {
     gap: 6,
     marginBottom: 6,
+  },
+  disconnectButton: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth * 2,
+    borderColor: "rgba(127,127,127,0.4)",
+  },
+  disconnectText: {
+    fontSize: 12,
+    fontWeight: "600",
   },
   walletLabel: {
     fontSize: 12,
@@ -435,8 +621,8 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 28,
-    fontWeight: '800',
-    textAlign: 'center',
+    fontWeight: "800",
+    textAlign: "center",
     marginTop: 8,
   },
   inputRow: {
@@ -456,33 +642,27 @@ const styles = StyleSheet.create({
   startButton: {
     height: 48,
     borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   startButtonText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  statusContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   status: {
     fontSize: 16,
-    fontWeight: '600',
-  },
-  resetButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth * 2,
-    borderColor: 'rgba(127,127,127,0.4)',
-  },
-  resetText: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   board: {
     marginTop: 8,
@@ -491,17 +671,17 @@ const styles = StyleSheet.create({
   newGameButton: {
     marginTop: 16,
     height: 44,
-    alignSelf: 'center',
+    alignSelf: "center",
     paddingHorizontal: 16,
     borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth * 2,
-    borderColor: 'rgba(127,127,127,0.4)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderColor: "rgba(127,127,127,0.4)",
+    alignItems: "center",
+    justifyContent: "center",
   },
   newGameText: {
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   addressRow: {
     gap: 6,
