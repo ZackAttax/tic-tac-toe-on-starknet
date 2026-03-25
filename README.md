@@ -4,7 +4,7 @@
 
 ### App environment variables
 
-Create `app/.env` (or copy from `app/env.example`) and define:
+Create `app/.env` and define:
 
 - `EXPO_PUBLIC_ENABLE_STARKNET` (required): Set to `true` or `1`
 - `EXPO_PUBLIC_TIC_TAC_TOE_CONTRACT_ADDRESS` (required): Deployed TicTacToe contract address
@@ -25,6 +25,25 @@ EXPO_PUBLIC_SEPOLIA_RPC_URL=https://starknet-sepolia.g.alchemy.com/starknet/vers
 EXPO_PUBLIC_MAINNET_RPC_URL=https://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_10/<ALCHEMY_API_KEY>
 EXPO_PUBLIC_AVNU_API_KEY=
 ```
+
+### Run the app
+
+**Prerequisites**
+
+- Node.js (LTS recommended)
+- npm or yarn
+
+**Steps**
+
+1. Install dependencies: `cd app && npm install`
+2. Create `app/.env` with the required variables (see the example above)
+3. Start the Expo dev server: from the `app/` directory, run `npm start`
+
+**Platform-specific commands** (from `app/package.json`):
+
+- `npm run web` — run in the browser
+- `npm run ios` — run on the iOS simulator
+- `npm run android` — run on the Android emulator
 
 ## Deploy to Sepolia
 

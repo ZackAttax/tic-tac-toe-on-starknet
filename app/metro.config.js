@@ -1,17 +1,25 @@
 /* global require, module, __dirname */
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { getDefaultConfig } = require("expo/metro-config");
-const { withStarkzap } = require("@starkzap/native/metro");
+const { withStarkzap } = require("starkzap-native/metro");
 const path = require("path");
 
 const workspaceRoot = path.resolve(__dirname, "../..");
+const starkzapRoot = path.resolve(workspaceRoot, "starkzap");
 const appNodeModules = path.resolve(__dirname, "node_modules");
+const reactNativeNodeModules = path.resolve(
+  appNodeModules,
+  "react-native/node_modules"
+);
+const starkzapNodeModules = path.resolve(starkzapRoot, "node_modules");
 const config = getDefaultConfig(__dirname);
 
 // Monorepo resolution (workspace packages + hoisted deps)
 config.watchFolders = [workspaceRoot];
 config.resolver.nodeModulesPaths = [
   appNodeModules,
+  reactNativeNodeModules,
+  starkzapNodeModules,
   path.resolve(workspaceRoot, "node_modules"),
 ];
 config.resolver.disableHierarchicalLookup = true;
@@ -23,6 +31,7 @@ config.resolver.extraNodeModules = {
     appNodeModules,
     "react-native-reanimated"
   ),
+  starkzap: starkzapRoot,
 };
 
 const finalConfig = withStarkzap(config);
