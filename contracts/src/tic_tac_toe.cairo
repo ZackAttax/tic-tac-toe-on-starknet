@@ -1,49 +1,91 @@
 // SPDX-License-Identifier: MIT
-// Cairo 1.x — Starknet TicTacToe
+// Cairo 1.x — Starknet Ultimate TicTacToe
 
 use starknet::ContractAddress;
 
 #[starknet::interface]
 pub trait ITicTacToe<TContractState> {
     fn create_game(ref self: TContractState, opponent: ContractAddress) -> u64;
-    fn play_move(ref self: TContractState, game_id: u64, cell: u8);
+    fn play_move(ref self: TContractState, game_id: u64, board_index: u8, cell_index: u8);
     fn get_game(self: @TContractState, game_id: u64) -> tictactoe::Game;
+    /// Exposes derived meta for clients/tests; must stay consistent with `get_game` boards.
+    fn get_game_meta(self: @TContractState, game_id: u64) -> tictactoe::GameMeta;
 }
-
 
 #[starknet::contract]
 pub mod tictactoe {
+    use core::traits::TryInto;
     use starknet::get_caller_address;
     use starknet::ContractAddress;
-    use starknet::storage::{ Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
-        StoragePointerWriteAccess,};
+    use starknet::storage::{
+        Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePathEntry,
+        StoragePointerReadAccess, StoragePointerWriteAccess,
+    };
 
     #[derive(Copy, Drop, Serde, starknet::Store)]
-        pub struct Game {
-            pub player_x: ContractAddress,
-            pub player_o: ContractAddress,
-            pub x_bits: u16,   // 9-bit bitboard for X
-            pub o_bits: u16,   // 9-bit bitboard for O
-            pub turn: u8,      // 0 = X's turn, 1 = O's turn
-            pub status: u8,    // 0 = Ongoing, 1 = X Won, 2 = O Won, 3 = Draw
-        }
+    pub struct LocalBoard {
+        pub x_bits: u16,
+        pub o_bits: u16,
+        pub status: u8,
+    }
+
+    #[derive(Copy, Drop, Serde, starknet::Store)]
+    pub struct BoardSet {
+        pub b0: LocalBoard,
+        pub b1: LocalBoard,
+        pub b2: LocalBoard,
+        pub b3: LocalBoard,
+        pub b4: LocalBoard,
+        pub b5: LocalBoard,
+        pub b6: LocalBoard,
+        pub b7: LocalBoard,
+        pub b8: LocalBoard,
+    }
+
+    /// Game fields stored once per game (no embedded boards).
+    #[derive(Copy, Drop, Serde, starknet::Store)]
+    pub struct GameMeta {
+        pub player_x: ContractAddress,
+        pub player_o: ContractAddress,
+        pub next_board: u8,
+        pub turn: u8,
+        pub status: u8,
+        /// Meta-game X occupancy (which sub-boards X won); updated when a sub-board resolves.
+        pub meta_x_bits: u16,
+        /// Meta-game O occupancy.
+        pub meta_o_bits: u16,
+        /// Count of sub-boards with status != 0 (finished).
+        pub completed_locals: u8,
+    }
+
+    #[derive(Copy, Drop, Serde, starknet::Store)]
+    pub struct Game {
+        pub player_x: ContractAddress,
+        pub player_o: ContractAddress,
+        pub boards: BoardSet,
+        pub next_board: u8,
+        pub turn: u8,
+        pub status: u8,
+    }
+
     #[storage]
     struct Storage {
         next_game_id: u64,
-        games: Map<u64, Game>,
+        game_meta: Map<u64, GameMeta>,
+        /// Per-game local boards: avoids rewriting all 9 boards on every move.
+        boards: Map<u64, Map<u8, LocalBoard>>,
     }
 
-
     #[derive(Drop, Serde, starknet::Event)]
-    struct GameCreated {
-        game_id: u64,
-        player_x: ContractAddress,
-        player_o: ContractAddress,
+    pub struct GameCreated {
+        pub game_id: u64,
+        pub player_x: ContractAddress,
+        pub player_o: ContractAddress,
     }
 
     #[event]
     #[derive(Drop, starknet::Event)]
-    enum Event {
+    pub enum Event {
         GameCreated: GameCreated,
         MovePlayed: MovePlayed,
         GameWon: GameWon,
@@ -51,153 +93,233 @@ pub mod tictactoe {
     }
 
     #[derive(Drop, Serde, starknet::Event)]
-    struct MovePlayed {
-        game_id: u64,
-        player: ContractAddress,
-        cell: u8,
-        x_bits: u16,
-        o_bits: u16,
-        next_turn: u8,
+    pub struct MovePlayed {
+        pub game_id: u64,
+        pub player: ContractAddress,
+        pub board_index: u8,
+        pub cell_index: u8,
+        pub next_board: u8,
+        pub next_turn: u8,
+        pub local_board_status: u8,
+        pub game_status: u8,
     }
 
     #[derive(Drop, Serde, starknet::Event)]
-    struct GameWon {
-        game_id: u64,
-        winner: ContractAddress, // X or O who won
-        status: u8,              // 1 if X, 2 if O
+    pub struct GameWon {
+        pub game_id: u64,
+        pub winner: ContractAddress,
+        pub status: u8,
     }
 
     #[derive(Drop, Serde, starknet::Event)]
-    struct GameDraw {
-        game_id: u64,
+    pub struct GameDraw {
+        pub game_id: u64,
     }
 
-    // --- Public/external interface via embedded ABI ---
+    fn empty_local() -> LocalBoard {
+        LocalBoard { x_bits: 0_u16, o_bits: 0_u16, status: 0_u8 }
+    }
+
+    /// Unset map entries read as zero; normalize to a single canonical empty value.
+    fn normalize_local_board(b: LocalBoard) -> LocalBoard {
+        if b.x_bits == 0_u16 && b.o_bits == 0_u16 && b.status == 0_u8 {
+            empty_local()
+        } else {
+            b
+        }
+    }
+
+    fn read_board(self: @ContractState, game_id: u64, index: u8) -> LocalBoard {
+        normalize_local_board(self.boards.entry(game_id).read(index))
+    }
+
+    fn load_board_set(self: @ContractState, game_id: u64) -> BoardSet {
+        BoardSet {
+            b0: read_board(self, game_id, 0_u8),
+            b1: read_board(self, game_id, 1_u8),
+            b2: read_board(self, game_id, 2_u8),
+            b3: read_board(self, game_id, 3_u8),
+            b4: read_board(self, game_id, 4_u8),
+            b5: read_board(self, game_id, 5_u8),
+            b6: read_board(self, game_id, 6_u8),
+            b7: read_board(self, game_id, 7_u8),
+            b8: read_board(self, game_id, 8_u8),
+        }
+    }
+
+    fn game_from_meta(meta: @GameMeta, boards: BoardSet) -> Game {
+        Game {
+            player_x: *meta.player_x,
+            player_o: *meta.player_o,
+            boards,
+            next_board: *meta.next_board,
+            turn: *meta.turn,
+            status: *meta.status,
+        }
+    }
+
     #[abi(embed_v0)]
     impl TicTacToeImpl of super::ITicTacToe<ContractState> {
         fn create_game(ref self: ContractState, opponent: ContractAddress) -> u64 {
             let caller = get_caller_address();
-
-            // Initialize a new game: caller is X, opponent is O
+            let zero: ContractAddress = 0.try_into().unwrap();
+            assert(opponent != zero, 'zero_opponent');
+            assert(caller != opponent, 'same_player');
             let game_id = self.next_game_id.read();
             self.next_game_id.write(game_id + 1_u64);
 
-            let game = Game {
+            let meta = GameMeta {
                 player_x: caller,
                 player_o: opponent,
-                x_bits: 0_u16,
-                o_bits: 0_u16,
-                turn: 0_u8,     // X starts
-                status: 0_u8,   // Ongoing
+                next_board: 9_u8,
+                turn: 0_u8,
+                status: 0_u8,
+                meta_x_bits: 0_u16,
+                meta_o_bits: 0_u16,
+                completed_locals: 0_u8,
             };
 
-            self.games.write(game_id, game);
+            self.game_meta.write(game_id, meta);
 
-            self.emit(Event::GameCreated(GameCreated {
-                game_id,
-                player_x: caller,
-                player_o: opponent,
-            }));
+            self.emit(Event::GameCreated(GameCreated { game_id, player_x: caller, player_o: opponent }));
 
             game_id
         }
 
-        /// `cell` in 0..=8
-        fn play_move(ref self: ContractState, game_id: u64, cell: u8) {
-            // Basic input checks
-            assert(cell <= 8_u8, 'bad_cell');
-            // Ensure game exists
+        fn play_move(ref self: ContractState, game_id: u64, board_index: u8, cell_index: u8) {
+            assert(board_index <= 8_u8, 'bad_board');
+            assert(cell_index <= 8_u8, 'bad_cell');
+
             let next_id = self.next_game_id.read();
             assert(game_id < next_id, 'unknown_game');
 
-            let mut game = self.games.read(game_id);
-            assert(game.status == 0_u8, 'game_over');
+            let mut meta = self.game_meta.read(game_id);
+            assert(meta.status == 0_u8, 'game_over');
 
             let caller = get_caller_address();
-
-            // Enforce turn ownership
-            if game.turn == 0_u8 {
-                assert(caller == game.player_x, 'not_x_turn');
+            if meta.turn == 0_u8 {
+                assert(caller == meta.player_x, 'not_x_turn');
             } else {
-                assert(caller == game.player_o, 'not_o_turn');
+                assert(caller == meta.player_o, 'not_o_turn');
             }
 
-            // Check cell vacancy
-            let occupied: u16 = game.x_bits | game.o_bits;
-            let mask: u16 = bit_mask(cell);
-            assert((occupied & mask) == 0_u16, 'cell_taken');
-
-            // Apply move
-            if game.turn == 0_u8 {
-                game.x_bits = game.x_bits | mask;
+            // Forced-board routing
+            let nb = meta.next_board;
+            if nb == 9_u8 {
+                let chosen = read_board(@self, game_id, board_index);
+                assert(chosen.status == 0_u8, 'board_done');
             } else {
-                game.o_bits = game.o_bits | mask;
-            }
-
-            // Check win/draw
-            let mut ended: bool = false;
-
-            if has_winning(game.x_bits) {
-                game.status = 1_u8; // X won
-                ended = true;
-                self.games.write(game_id, game);
-
-                self.emit(Event::GameWon(GameWon {
-                    game_id,
-                    winner: game.player_x,
-                    status: 1_u8,
-                }));
-            } else if has_winning(game.o_bits) {
-                game.status = 2_u8; // O won
-                ended = true;
-                self.games.write(game_id, game);
-
-                self.emit(Event::GameWon(GameWon {
-                    game_id,
-                    winner: game.player_o,
-                    status: 2_u8,
-                }));
-            } else {
-                // Draw if all 9 bits are taken
-                let all_taken: u16 = game.x_bits | game.o_bits;
-                if all_taken == 0x01FF_u16 { // 9 lowest bits set
-                    game.status = 3_u8; // Draw
-                    ended = true;
-                    self.games.write(game_id, game);
-
-                    self.emit(Event::GameDraw(GameDraw { game_id }));
+                let forced = read_board(@self, game_id, nb);
+                if forced.status == 0_u8 {
+                    assert(board_index == nb, 'wrong_board');
+                } else {
+                    let chosen = read_board(@self, game_id, board_index);
+                    assert(chosen.status == 0_u8, 'board_done');
                 }
             }
 
-            // If not ended, toggle turn and persist
-            if !ended {
-                game.turn = game.turn ^ 1_u8; // flip turn
-                self.games.write(game_id, game);
+            let mut local = read_board(@self, game_id, board_index);
+            assert(local.status == 0_u8, 'board_done');
 
-                self.emit(Event::MovePlayed(MovePlayed {
-                    game_id,
-                    player: caller,
-                    cell,
-                    x_bits: game.x_bits,
-                    o_bits: game.o_bits,
-                    next_turn: game.turn,
-                }));
+            let mask = bit_mask(cell_index);
+            let occupied = local.x_bits | local.o_bits;
+            assert((occupied & mask) == 0_u16, 'cell_taken');
+
+            if meta.turn == 0_u8 {
+                local.x_bits = local.x_bits | mask;
+            } else {
+                local.o_bits = local.o_bits | mask;
             }
+
+            local.status = compute_local_status(@local);
+            self.boards.entry(game_id).write(board_index, local);
+
+            // Incremental meta: sub-board just finished (status was 0 before this move).
+            if local.status == 1_u8 {
+                meta.meta_x_bits = meta.meta_x_bits | bit_mask(board_index);
+                meta.completed_locals = meta.completed_locals + 1_u8;
+            } else if local.status == 2_u8 {
+                meta.meta_o_bits = meta.meta_o_bits | bit_mask(board_index);
+                meta.completed_locals = meta.completed_locals + 1_u8;
+            } else if local.status == 3_u8 {
+                meta.completed_locals = meta.completed_locals + 1_u8;
+            }
+
+            if has_winning(meta.meta_x_bits) {
+                meta.status = 1_u8;
+                self.game_meta.write(game_id, meta);
+                self.emit(Event::GameWon(GameWon { game_id, winner: meta.player_x, status: 1_u8 }));
+                return;
+            }
+            if has_winning(meta.meta_o_bits) {
+                meta.status = 2_u8;
+                self.game_meta.write(game_id, meta);
+                self.emit(Event::GameWon(GameWon { game_id, winner: meta.player_o, status: 2_u8 }));
+                return;
+            }
+            if meta.completed_locals == 9_u8 {
+                meta.status = 3_u8;
+                self.game_meta.write(game_id, meta);
+                self.emit(Event::GameDraw(GameDraw { game_id }));
+                return;
+            }
+
+            // Ongoing: next forced board from cell_index
+            let target = read_board(@self, game_id, cell_index);
+            if target.status == 0_u8 {
+                meta.next_board = cell_index;
+            } else {
+                meta.next_board = 9_u8;
+            }
+            meta.turn = meta.turn ^ 1_u8;
+
+            let local_board_status = local.status;
+            self.game_meta.write(game_id, meta);
+
+            self.emit(Event::MovePlayed(MovePlayed {
+                game_id,
+                player: caller,
+                board_index,
+                cell_index,
+                next_board: meta.next_board,
+                next_turn: meta.turn,
+                local_board_status,
+                game_status: meta.status,
+            }));
         }
 
         fn get_game(self: @ContractState, game_id: u64) -> Game {
             let next_id = self.next_game_id.read();
             assert(game_id < next_id, 'unknown_game');
-            self.games.read(game_id)
+            let meta = self.game_meta.read(game_id);
+            let boards = load_board_set(self, game_id);
+            game_from_meta(@meta, boards)
+        }
+
+        fn get_game_meta(self: @ContractState, game_id: u64) -> GameMeta {
+            let next_id = self.next_game_id.read();
+            assert(game_id < next_id, 'unknown_game');
+            self.game_meta.read(game_id)
         }
     }
-    // --- Internal helpers ---
 
-    // Returns true if `bits` contains any 3-in-a-row.
-    // Winning masks (rows, cols, diagonals):
-    // 111000000 (448), 000111000 (56), 000000111 (7),
-    // 100100100 (292), 010010010 (146), 001001001 (73),
-    // 100010001 (273), 001010100 (84)
+    fn is_local_board_full(board: @LocalBoard) -> bool {
+        (*board.x_bits | *board.o_bits) == 0x01FF_u16
+    }
+
+    fn compute_local_status(board: @LocalBoard) -> u8 {
+        if has_winning(*board.x_bits) {
+            return 1_u8;
+        }
+        if has_winning(*board.o_bits) {
+            return 2_u8;
+        }
+        if is_local_board_full(board) {
+            return 3_u8;
+        }
+        0_u8
+    }
+
     fn has_winning(bits: u16) -> bool {
         let r0: u16 = 448_u16;
         let r1: u16 = 56_u16;
@@ -218,7 +340,6 @@ pub mod tictactoe {
             || (bits & d1) == d1
     }
 
-    // Returns a mask with the bit at `cell` set. `cell` in 0..=8.
     fn bit_mask(cell: u8) -> u16 {
         match cell {
             0_u8 => 1_u16,
