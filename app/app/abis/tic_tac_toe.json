@@ -95,6 +95,44 @@
     ]
   },
   {
+    "type": "struct",
+    "name": "tic_tac_toe::tic_tac_toe::tictactoe::GameMeta",
+    "members": [
+      {
+        "name": "player_x",
+        "type": "core::starknet::contract_address::ContractAddress"
+      },
+      {
+        "name": "player_o",
+        "type": "core::starknet::contract_address::ContractAddress"
+      },
+      {
+        "name": "next_board",
+        "type": "core::integer::u8"
+      },
+      {
+        "name": "turn",
+        "type": "core::integer::u8"
+      },
+      {
+        "name": "status",
+        "type": "core::integer::u8"
+      },
+      {
+        "name": "meta_x_bits",
+        "type": "core::integer::u16"
+      },
+      {
+        "name": "meta_o_bits",
+        "type": "core::integer::u16"
+      },
+      {
+        "name": "completed_locals",
+        "type": "core::integer::u8"
+      }
+    ]
+  },
+  {
     "type": "interface",
     "name": "tic_tac_toe::tic_tac_toe::ITicTacToe",
     "items": [
@@ -146,6 +184,22 @@
         "outputs": [
           {
             "type": "tic_tac_toe::tic_tac_toe::tictactoe::Game"
+          }
+        ],
+        "state_mutability": "view"
+      },
+      {
+        "type": "function",
+        "name": "get_game_meta",
+        "inputs": [
+          {
+            "name": "game_id",
+            "type": "core::integer::u64"
+          }
+        ],
+        "outputs": [
+          {
+            "type": "tic_tac_toe::tic_tac_toe::tictactoe::GameMeta"
           }
         ],
         "state_mutability": "view"
