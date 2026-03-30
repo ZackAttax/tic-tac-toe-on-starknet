@@ -2,8 +2,12 @@
 #
 # Deploy Tic-Tac-Toe contract to StarkNet Sepolia testnet
 
+set -euo pipefail
+
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 PROJECT_ROOT=$SCRIPT_DIR/..
+POLL_INTERVAL_SECONDS=${TICTACTOE_POLL_INTERVAL_SECONDS:-5}
+MAX_CLASS_WAIT_ATTEMPTS=${TICTACTOE_MAX_CLASS_WAIT_ATTEMPTS:-24}
 
 # Load env variable from `.env` only if they're not already set
 if [ -z "$STARKNET_KEYSTORE" ] || [ -z "$STARKNET_ACCOUNT" ] || [ -z "$STARKNET_NETWORK" ] || { [ -z "$STARKNET_RPC" ] && [ -z "$STARKNET_RPC_URL" ]; }; then
@@ -46,8 +50,38 @@ display_help() {
   echo "   STARKNET_RPC        Explicit RPC URL (takes precedence over network)"
   echo "   STARKNET_RPC_URL    Alias of STARKNET_RPC (takes precedence over network)"
   echo "   TICTACTOE_CLASS_HASH Optional: existing declared class hash to skip declare"
+  echo "   TICTACTOE_POLL_INTERVAL_SECONDS Optional: seconds between declare visibility checks (default: 5)"
+  echo "   TICTACTOE_MAX_CLASS_WAIT_ATTEMPTS Optional: number of declare visibility checks before failing (default: 24)"
+  echo
+  echo "   Use a JSON-RPC v0.8 endpoint URL with starkli 0.4.x (e.g. Alchemy .../rpc/v0_8/...); v0_9 may return Invalid block id."
   echo
   echo "Example: $0"
+}
+
+extract_declared_class_hash() {
+  local output="$1"
+
+  printf '%s\n' "$output" | awk '
+    /^Class hash declared:$/ { getline; print $1; exit }
+    /^Declaring Cairo 1 class:/ { print $NF; exit }
+  '
+}
+
+wait_for_declared_class() {
+  local class_hash="$1"
+  local attempt=1
+
+  while [ "$attempt" -le "$MAX_CLASS_WAIT_ATTEMPTS" ]; do
+    if starkli class-by-hash "${PROVIDER_ARGS[@]}" "$class_hash" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    echo "Waiting for declared class to become visible on RPC ($attempt/$MAX_CLASS_WAIT_ATTEMPTS)..."
+    sleep "$POLL_INTERVAL_SECONDS"
+    attempt=$((attempt + 1))
+  done
+
+  return 1
 }
 
 # Transform long options to short ones
@@ -90,6 +124,8 @@ done
 CONTRACTS_DIR=$PROJECT_ROOT/contracts
 # Sierra artifact produced by scarb for the tictactoe contract module
 TICTACTOE_SIERRA_FILE=$CONTRACTS_DIR/target/dev/tic_tac_toe_tictactoe.contract_class.json
+# CASM from the same Scarb build (Scarb.toml casm = true) — pass to starkli so it does not recompile Sierra with a mismatched bundled compiler.
+TICTACTOE_CASM_FILE=$CONTRACTS_DIR/target/dev/tic_tac_toe_tictactoe.compiled_contract_class.json
 
 # Build the contract
 echo "Building the contract..."
@@ -100,36 +136,38 @@ if [ ! -f "$TICTACTOE_SIERRA_FILE" ]; then
   echo "Error: expected artifact not found at $TICTACTOE_SIERRA_FILE"
   exit 1
 fi
+if [ ! -f "$TICTACTOE_CASM_FILE" ]; then
+  echo "Error: expected CASM artifact not found at $TICTACTOE_CASM_FILE (enable casm = true in contracts/Scarb.toml and run scarb build)."
+  exit 1
+fi
 
 # Declaring the contract (skip if TICTACTOE_CLASS_HASH is provided)
 if [ -z "$TICTACTOE_CLASS_HASH" ]; then
   echo "Declaring the contract..."
-  echo "starkli declare ${PROVIDER_ARGS[*]} --keystore $STARKNET_KEYSTORE --account $STARKNET_ACCOUNT --watch $TICTACTOE_SIERRA_FILE"
-  TICTACTOE_DECLARE_OUTPUT=$(starkli declare "${PROVIDER_ARGS[@]}" --keystore "$STARKNET_KEYSTORE" --account "$STARKNET_ACCOUNT" --watch "$TICTACTOE_SIERRA_FILE" 2>&1)
-  # Try to parse class hash from output line containing 'Class hash'
-  TICTACTOE_CONTRACT_CLASS_HASH=$(echo "$TICTACTOE_DECLARE_OUTPUT" | grep -i "Class hash" | awk '{print $NF}')
-  # Fallback: compute class hash locally if parsing failed
-  if [ -z "$TICTACTOE_CONTRACT_CLASS_HASH" ]; then
-    if command -v starkli >/dev/null 2>&1; then
-      TICTACTOE_CONTRACT_CLASS_HASH=$(starkli class-hash "$TICTACTOE_SIERRA_FILE")
-    fi
+  echo "starkli declare ${PROVIDER_ARGS[*]} --casm-file $TICTACTOE_CASM_FILE --keystore $STARKNET_KEYSTORE --account $STARKNET_ACCOUNT $TICTACTOE_SIERRA_FILE"
+  TICTACTOE_DECLARE_OUTPUT=$(starkli declare "${PROVIDER_ARGS[@]}" --casm-file "$TICTACTOE_CASM_FILE" --keystore "$STARKNET_KEYSTORE" --account "$STARKNET_ACCOUNT" "$TICTACTOE_SIERRA_FILE" 2>&1)
+  STARKLI_DECLARE_EXIT=$?
+  if [ "$STARKLI_DECLARE_EXIT" -ne 0 ]; then
+    echo "Error: starkli declare failed (exit $STARKLI_DECLARE_EXIT). Not deploying — the class was not declared on-chain."
+    echo "$TICTACTOE_DECLARE_OUTPUT"
+    exit 1
   fi
-  # Sanitize/validate class hash to avoid Felt parse errors
+
+  echo "$TICTACTOE_DECLARE_OUTPUT"
+  TICTACTOE_CONTRACT_CLASS_HASH=$(extract_declared_class_hash "$TICTACTOE_DECLARE_OUTPUT")
   if [ -n "$TICTACTOE_CONTRACT_CLASS_HASH" ]; then
     TICTACTOE_CONTRACT_CLASS_HASH=$(echo "$TICTACTOE_CONTRACT_CLASS_HASH" | tr -d '\r\n\t ' | tr '[:upper:]' '[:lower:]')
   fi
   if ! echo "$TICTACTOE_CONTRACT_CLASS_HASH" | grep -Eq '^0x[0-9a-f]+$'; then
-    echo "Parsed class hash seems invalid: '$TICTACTOE_CONTRACT_CLASS_HASH'"
-    if command -v starkli >/dev/null 2>&1; then
-      TICTACTOE_CONTRACT_CLASS_HASH=$(starkli class-hash "$TICTACTOE_SIERRA_FILE" | tr -d '\r\n\t ' | tr '[:upper:]' '[:lower:]')
-      echo "Using computed class hash: $TICTACTOE_CONTRACT_CLASS_HASH"
-    fi
-  fi
-  if [ -z "$TICTACTOE_CONTRACT_CLASS_HASH" ]; then
-    echo "Error: could not determine class hash from declare output:\n$TICTACTOE_DECLARE_OUTPUT"
+    echo "Error: could not parse a valid class hash from declare output."
     exit 1
   fi
   echo "Contract class hash: $TICTACTOE_CONTRACT_CLASS_HASH"
+
+  if ! wait_for_declared_class "$TICTACTOE_CONTRACT_CLASS_HASH"; then
+    echo "Error: class $TICTACTOE_CONTRACT_CLASS_HASH was declared but never became visible through the configured RPC."
+    exit 1
+  fi
 else
   echo "Using existing contract class hash: $TICTACTOE_CLASS_HASH"
   TICTACTOE_CONTRACT_CLASS_HASH=$TICTACTOE_CLASS_HASH
@@ -137,11 +175,10 @@ fi
 
 # Deploying the contract (no constructor args for TicTacToe)
 echo "Deploying the contract..."
-echo "starkli deploy ${PROVIDER_ARGS[*]} --keystore $STARKNET_KEYSTORE --account $STARKNET_ACCOUNT --watch $TICTACTOE_CONTRACT_CLASS_HASH"
-DEPLOY_OUTPUT=$(starkli deploy "${PROVIDER_ARGS[@]}" --keystore "$STARKNET_KEYSTORE" --account "$STARKNET_ACCOUNT" --watch "$TICTACTOE_CONTRACT_CLASS_HASH" 2>&1)
+echo "starkli deploy ${PROVIDER_ARGS[*]} --keystore $STARKNET_KEYSTORE --account $STARKNET_ACCOUNT $TICTACTOE_CONTRACT_CLASS_HASH"
+DEPLOY_OUTPUT=$(starkli deploy "${PROVIDER_ARGS[@]}" --keystore "$STARKNET_KEYSTORE" --account "$STARKNET_ACCOUNT" "$TICTACTOE_CONTRACT_CLASS_HASH" 2>&1)
 echo "$DEPLOY_OUTPUT"
 DEPLOYED_ADDRESS=$(echo "$DEPLOY_OUTPUT" | grep -iE "Contract address|Address" | awk '{print $NF}')
 if [ -n "$DEPLOYED_ADDRESS" ]; then
   echo "Deployed contract address: $DEPLOYED_ADDRESS"
 fi
-
