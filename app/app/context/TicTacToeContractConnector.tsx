@@ -1,22 +1,16 @@
 import React, { createContext, useCallback, useContext, useState } from "react";
 import { type Call } from "starknet";
 import { normalizeAddress } from "@/utils/address";
+import { parseCallContractGameResult } from "@/utils/getGameParse";
+import type { Game, GameId } from "@/utils/ultimateTicTacToe";
 import { useStarknetConnector } from "@/app/context/StarknetConnector";
+
+export type { Game, GameId, LocalBoard, BoardSet } from "@/utils/ultimateTicTacToe";
+/** Re-export for legacy imports; prefer `@/utils/getGameParse` for `normalizeBoardSet` in new code. */
+export { normalizeBoardSet } from "@/utils/getGameParse";
 
 const DEFAULT_TIC_TAC_TOE_CONTRACT_ADDRESS =
   "0x03727da24037502a3e38ac980239982e3974c8ca78bd87ab5963a7a8690fd8e8";
-
-export type GameId = string;
-
-type Game = {
-  player_x: string;
-  player_o: string;
-  x_bits: number;
-  o_bits: number;
-  turn: number; // 0 = X, 1 = O
-  status: number; // 0 ongoing, 1 X won, 2 O won, 3 draw
-  gameId: GameId;
-};
 
 type TransactionReceiptEvent = {
   data?: unknown[];
@@ -26,15 +20,17 @@ type TransactionReceiptLike = {
   events?: TransactionReceiptEvent[];
 };
 
-type CallContractResultLike = unknown[] | { result?: unknown[] };
-
 type TicTacToeContextType = {
   contractAddress: string | null;
   contract: null;
 
   currentGameId: GameId | null;
-  createGame: (opponentAddress: string) => Promise<GameId | null>; // returns game id or null
-  playMove: (gameId: GameId, cell: number) => Promise<string | null>;
+  createGame: (opponentAddress: string) => Promise<GameId | null>;
+  playMove: (
+    gameId: GameId,
+    boardIndex: number,
+    cellIndex: number
+  ) => Promise<string | null>;
   getGame: (gameId: GameId) => Promise<Game | null>;
   loadGame: (gameId: GameId) => void;
   clearGame: () => void;
@@ -106,7 +102,6 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
       if (!txHash || !provider) return null;
 
       try {
-        // Ensure the transaction is confirmed on-chain
         await tx.wait();
       } catch {
         // continue to attempt parsing receipt anyway
@@ -160,12 +155,17 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
   );
 
   const playMove = useCallback(
-    async (gameId: GameId, cell: number): Promise<string | null> => {
+    async (
+      gameId: GameId,
+      boardIndex: number,
+      cellIndex: number
+    ): Promise<string | null> => {
       const normalizedGameId = normalizeGameId(gameId);
       if (__DEV__)
         console.log("play_move called", {
           gameId: normalizedGameId ?? gameId,
-          cell,
+          boardIndex,
+          cellIndex,
           contractAddress,
         });
       if (!contractAddress || !normalizedGameId) return null;
@@ -173,7 +173,11 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
         const call: Call = {
           contractAddress,
           entrypoint: "play_move",
-          calldata: [normalizedGameId, String(cell)],
+          calldata: [
+            normalizedGameId,
+            String(boardIndex),
+            String(cellIndex),
+          ],
         };
         if (!wallet) return null;
         const tx = await wallet.execute([call]);
@@ -204,56 +208,16 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
       const normalizedGameId = normalizeGameId(gameId);
       if (!normalizedGameId) return null;
       try {
-        const raw = (await provider.callContract({
+        const raw = await provider.callContract({
           contractAddress,
           entrypoint: "get_game",
           calldata: [normalizedGameId],
-        })) as CallContractResultLike;
-        let values: unknown[];
-        if (Array.isArray(raw)) {
-          values = raw;
-        } else if (Array.isArray(raw?.result)) {
-          values = raw.result;
-        } else {
-          values = [];
-        }
-        if (values.length < 6) return null;
-
-        const toScalarString = (v: unknown): string => {
-          if (typeof v === "string") return v;
-          if (
-            typeof v === "number" ||
-            typeof v === "bigint" ||
-            typeof v === "boolean"
-          ) {
-            return String(v);
-          }
-          return "";
-        };
-        const toNum = (v: unknown) =>
-          typeof v === "bigint" ? Number(v) : Number(toScalarString(v));
-        const toHex = (v: unknown) => {
-          try {
-            const b = BigInt(toScalarString(v));
-            return "0x" + b.toString(16);
-          } catch {
-            return String(v);
-          }
-        };
-        const game: Game = {
-          player_x: normalizeAddress(toHex(values[0])),
-          player_o: normalizeAddress(toHex(values[1])),
-          x_bits: toNum(values[2]),
-          o_bits: toNum(values[3]),
-          turn: toNum(values[4]),
-          status: toNum(values[5]),
-          gameId: normalizedGameId,
-        };
+        });
+        const game = parseCallContractGameResult(raw as unknown, normalizedGameId);
         return game;
       } catch (e) {
         if (__DEV__) {
           const msg = e instanceof Error ? e.message : String(e || "");
-          // Suppress noisy logs when the contract returns 'unknown_game'
           if (!/unknown_game/i.test(msg)) {
             console.error("get_game failed", e);
           }

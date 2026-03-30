@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -19,61 +19,54 @@ import {
 import { useStarknetConnector } from "@/app/context/StarknetConnector";
 import AccountGate from "@/components/AccountGate";
 import { normalizeAddress } from "@/utils/address";
+import type { Game, LocalBoard, MyRole } from "@/utils/ultimateTicTacToe";
+import {
+  shouldCommitFetchedGame,
+  shouldSubmitAfterPreflight,
+} from "@/utils/moveConfirmation";
+import {
+  boardSetToArray,
+  deriveMetaBoard,
+  deriveWinningMetaLine,
+  isCellPlayable,
+  isPendingMoveConfirmedOnChain,
+  isSameMove,
+} from "@/utils/ultimateTicTacToe";
 
-type CellValue = "X" | "O" | null;
-type PendingMove = {
+type SelectedMove = {
   gameId: GameId;
-  cell: number;
+  boardIndex: number;
+  cellIndex: number;
   symbol: "X" | "O";
-  isPending: boolean;
 };
 
-function calculateWinner(board: CellValue[]): {
-  winner: "X" | "O" | null;
-  line: number[] | null;
-} {
-  const lines: ReadonlyArray<readonly [number, number, number]> = [
-    [0, 1, 2],
-    [3, 4, 5],
-    [6, 7, 8],
-    [0, 3, 6],
-    [1, 4, 7],
-    [2, 5, 8],
-    [0, 4, 8],
-    [2, 4, 6],
-  ];
-  for (const [a, b, c] of lines) {
-    const candidate = board[a];
-    if (candidate && candidate === board[b] && candidate === board[c]) {
-      return { winner: candidate, line: [a, b, c] };
-    }
-  }
-  return { winner: null, line: null };
-}
+type PendingMove = {
+  gameId: GameId;
+  boardIndex: number;
+  cellIndex: number;
+  symbol: "X" | "O";
+  isPending: boolean;
+  txHash?: string | null;
+};
 
-function isBoardFull(board: CellValue[]): boolean {
-  return board.every((v) => v !== null);
-}
+const EMPTY_LOCAL: LocalBoard = { x_bits: 0, o_bits: 0, status: 0 };
 
-function bitsToBoard(xBits: number, oBits: number): CellValue[] {
-  const arr: CellValue[] = Array(9).fill(null);
-  for (let i = 0; i < 9; i++) {
-    if ((xBits & (1 << i)) !== 0) arr[i] = "X";
-    else if ((oBits & (1 << i)) !== 0) arr[i] = "O";
-  }
-  return arr;
+function emptyBoardsArray(): LocalBoard[] {
+  return Array.from({ length: 9 }, () => ({ ...EMPTY_LOCAL }));
 }
 
 export default function PlayScreen() {
   const { account, disconnectAccount, waitForTransaction } =
     useStarknetConnector();
   const [opponentAddress, setOpponentAddress] = useState("");
-  const [board, setBoard] = useState<CellValue[]>(Array(9).fill(null));
-  const [currentPlayer, setCurrentPlayer] = useState<"X" | "O">("X");
-  const [myRole, setMyRole] = useState<"X" | "O" | null>(null);
+  const [game, setGame] = useState<Game | null>(null);
   const [gameStarted, setGameStarted] = useState(false);
   const [creatingGame, setCreatingGame] = useState(false);
   const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
+  const [selectedMove, setSelectedMove] = useState<SelectedMove | null>(null);
+  const [isConfirmingSelection, setIsConfirmingSelection] = useState(false);
+  const [syncStale, setSyncStale] = useState(false);
+  const [myRole, setMyRole] = useState<MyRole>(null);
   const {
     createGame,
     playMove,
@@ -83,81 +76,135 @@ export default function PlayScreen() {
     clearGame,
     contractAddress,
   } = useTicTacToe();
+  const currentGameIdRef = useRef<GameId | null>(currentGameId);
+  currentGameIdRef.current = currentGameId;
   const invitations: { id: GameId; from: string }[] = [];
   const [joinGameId, setJoinGameId] = useState("");
 
   const colorScheme = useColorScheme() ?? "light";
   const tint = Colors[colorScheme].tint;
 
-  const boardWithPendingMove = useMemo(() => {
-    if (!pendingMove || pendingMove.gameId !== currentGameId) {
-      return board;
-    }
-    if (board[pendingMove.cell] === pendingMove.symbol) {
-      return board;
-    }
-    const nextBoard = board.slice();
-    nextBoard[pendingMove.cell] = pendingMove.symbol;
-    return nextBoard;
-  }, [board, currentGameId, pendingMove]);
-
-  const { winner, line: winningLine } = useMemo(
-    () => calculateWinner(board),
-    [board]
+  const myAddress = useMemo(
+    () => normalizeAddress(account?.address || ""),
+    [account?.address]
   );
-  const isDraw = useMemo(() => !winner && isBoardFull(board), [board, winner]);
+
+  const activePendingMove =
+    pendingMove?.gameId === currentGameId ? pendingMove : null;
+
+  const boardsArray = useMemo(() => {
+    if (!game) return emptyBoardsArray();
+    return boardSetToArray(game.boards);
+  }, [game]);
+
+  const metaBoard = useMemo(() => deriveMetaBoard(boardsArray), [boardsArray]);
+
+  const winningMetaLine = useMemo(() => {
+    if (!game || game.status === 0) return null;
+    return deriveWinningMetaLine(metaBoard);
+  }, [game, metaBoard]);
+
+  const currentPlayer: "X" | "O" = game
+    ? game.turn === 0
+      ? "X"
+      : "O"
+    : "X";
+
   const isMyTurn = useMemo(
     () => (myRole ? currentPlayer === myRole : false),
     [currentPlayer, myRole]
   );
 
-  const myAddress = useMemo(
-    () => normalizeAddress(account?.address || ""),
-    [account?.address]
+  const fetchGame = useCallback(
+    async (gameId: GameId): Promise<Game | null> => {
+      return await getGame(gameId);
+    },
+    [getGame]
   );
-  const activePendingMove =
-    pendingMove?.gameId === currentGameId ? pendingMove : null;
 
-  const syncGame = useCallback(
-    async (gameId: GameId): Promise<boolean> => {
-      const game = await getGame(gameId);
-      if (!game) {
-        return false;
-      }
-
-      const nextBoard = bitsToBoard(game.x_bits, game.o_bits);
-      setBoard(nextBoard);
-      setCurrentPlayer(game.turn === 0 ? "X" : "O");
+  const commitGameSnapshot = useCallback(
+    (gameId: GameId, next: Game) => {
+      setGame(next);
 
       const me = myAddress;
-      const playerX = normalizeAddress(game.player_x || "");
-      const playerO = normalizeAddress(game.player_o || "");
+      const playerX = normalizeAddress(next.player_x || "");
+      const playerO = normalizeAddress(next.player_o || "");
       const role = me === playerX ? "X" : me === playerO ? "O" : null;
       setMyRole(role);
 
       setPendingMove((current) => {
-        if (!current || current.gameId !== gameId) {
-          return current;
-        }
-        return nextBoard[current.cell] === current.symbol ? null : current;
+        if (!current || current.gameId !== gameId) return current;
+        if (isPendingMoveConfirmedOnChain(current, next)) return null;
+        return current;
       });
 
-      return true;
+      setSelectedMove((current) => {
+        if (!current) return current;
+        if (current.gameId !== gameId) return current;
+        if (next.status !== 0) return null;
+        const stillPlayable = isCellPlayable({
+          game: next,
+          myRole: role,
+          boardIndex: current.boardIndex,
+          cellIndex: current.cellIndex,
+          hasPendingMove: false,
+        });
+        return stillPlayable ? current : null;
+      });
     },
-    [getGame, myAddress]
+    [myAddress]
+  );
+
+  const syncGame = useCallback(
+    async (gameId: GameId): Promise<Game | null> => {
+      const next = await fetchGame(gameId);
+      if (!next) {
+        if (shouldCommitFetchedGame(gameId, currentGameIdRef.current)) {
+          setSyncStale(true);
+        }
+        return null;
+      }
+
+      if (!shouldCommitFetchedGame(gameId, currentGameIdRef.current)) {
+        return next;
+      }
+
+      setSyncStale(false);
+      commitGameSnapshot(gameId, next);
+      return next;
+    },
+    [fetchGame, commitGameSnapshot]
   );
 
   const submitMove = useCallback(
-    async (gameId: GameId, cell: number, symbol: "X" | "O") => {
+    async (
+      gameId: GameId,
+      boardIndex: number,
+      cellIndex: number,
+      symbol: "X" | "O"
+    ) => {
       const isCurrentMove = (current: PendingMove | null): boolean =>
         current?.gameId === gameId &&
-        current.cell === cell &&
+        current.boardIndex === boardIndex &&
+        current.cellIndex === cellIndex &&
         current.symbol === symbol;
 
       const clearIfCurrent = () =>
         setPendingMove((current) => (isCurrentMove(current) ? null : current));
 
-      const txHash = await playMove(gameId, cell);
+      const txHash = await playMove(gameId, boardIndex, cellIndex);
+      setPendingMove((current) => {
+        if (!current || !isCurrentMove(current)) return current;
+        return {
+          gameId: current.gameId,
+          boardIndex: current.boardIndex,
+          cellIndex: current.cellIndex,
+          symbol: current.symbol,
+          isPending: current.isPending,
+          txHash: txHash ?? null,
+        };
+      });
+
       if (!txHash) {
         clearIfCurrent();
         return;
@@ -174,9 +221,9 @@ export default function PlayScreen() {
           return;
         }
 
-        setPendingMove((current) =>
-          isCurrentMove(current) ? { ...current, isPending: false } : current
-        );
+        // Authoritative refresh + pending clear only when chain state matches the
+        // move (see isPendingMoveConfirmedOnChain inside syncGame). Avoid clearing
+        // on a single stale RPC read right after waitForTransaction.
         await syncGame(gameId);
       } catch (waitError) {
         if (__DEV__) {
@@ -193,7 +240,6 @@ export default function PlayScreen() {
     [playMove, syncGame, waitForTransaction]
   );
 
-  // Poll game state while a game is selected.
   useEffect(() => {
     if (currentGameId == null) return;
 
@@ -228,11 +274,19 @@ export default function PlayScreen() {
     try {
       const gameId = await createGame(opponentAddress);
       if (gameId != null) {
+        const next = await fetchGame(gameId);
+        if (!next) {
+          if (__DEV__) {
+            console.log("Could not fetch game state after create");
+          }
+          return;
+        }
         loadGame(gameId);
-        setBoard(Array(9).fill(null));
-        setCurrentPlayer("X");
-        setMyRole("X");
         setPendingMove(null);
+        setSelectedMove(null);
+        setIsConfirmingSelection(false);
+        setSyncStale(false);
+        commitGameSnapshot(gameId, next);
         setGameStarted(true);
       } else {
         if (__DEV__) console.log("createGame returned null (no tx hash)");
@@ -246,72 +300,210 @@ export default function PlayScreen() {
     const id = joinGameId.trim();
     if (!/^[0-9]+$/.test(id)) return;
 
+    let next: Game | null = null;
     try {
-      const didLoad = await syncGame(id);
-      if (!didLoad) {
-        return;
-      }
+      next = await fetchGame(id);
     } catch (error) {
       if (__DEV__) {
         console.warn("Failed to load joined game", error);
       }
       return;
     }
+    if (!next) {
+      return;
+    }
 
     loadGame(id);
+    commitGameSnapshot(id, next);
     setPendingMove(null);
+    setSelectedMove(null);
+    setIsConfirmingSelection(false);
     setGameStarted(true);
     setJoinGameId("");
   }
 
-  function handleCellPress(index: number) {
+  function handleCellPress(boardIndex: number, cellIndex: number) {
     if (
       !gameStarted ||
-      winner ||
+      !game ||
+      game.status !== 0 ||
       currentGameId == null ||
       !isMyTurn ||
-      activePendingMove
+      activePendingMove ||
+      isConfirmingSelection
     ) {
       return;
     }
-    if (__DEV__)
-      console.log("cell pressed", index, { currentGameId, isMyTurn });
-    if (board[index] !== null) return;
-    setPendingMove({
-      gameId: currentGameId,
-      cell: index,
-      symbol: currentPlayer,
-      isPending: true,
+    const playable = isCellPlayable({
+      game,
+      myRole,
+      boardIndex,
+      cellIndex,
+      hasPendingMove: !!activePendingMove,
     });
-    void submitMove(currentGameId, index, currentPlayer);
+    if (!playable) return;
+
+    if (__DEV__)
+      console.log("cell pressed", boardIndex, cellIndex, {
+        currentGameId,
+        isMyTurn,
+      });
+
+    if (
+      selectedMove?.gameId === currentGameId &&
+      isSameMove(selectedMove, { boardIndex, cellIndex })
+    ) {
+      setSelectedMove(null);
+      return;
+    }
+
+    setSelectedMove({
+      gameId: currentGameId,
+      boardIndex,
+      cellIndex,
+      symbol: currentPlayer,
+    });
+  }
+
+  async function handleConfirmSelectedMove() {
+    if (isConfirmingSelection) return;
+    if (!selectedMove) return;
+    if (selectedMove.gameId !== currentGameId) return;
+    if (!game) return;
+    if (game.status !== 0) return;
+    if (activePendingMove) return;
+
+    const sel = selectedMove;
+    const gameId = sel.gameId;
+
+    setIsConfirmingSelection(true);
+    try {
+      const fresh = await fetchGame(gameId);
+
+      const decision = shouldSubmitAfterPreflight({
+        startedGameId: gameId,
+        activeGameId: currentGameIdRef.current,
+        fresh,
+        myAddress,
+        selection: {
+          boardIndex: sel.boardIndex,
+          cellIndex: sel.cellIndex,
+        },
+      });
+
+      if (!decision.ok) {
+        if (decision.reason === "not_playable") {
+          setSelectedMove(null);
+        }
+        return;
+      }
+
+      const { boardIndex, cellIndex, symbol } = sel;
+      setPendingMove({
+        gameId,
+        boardIndex,
+        cellIndex,
+        symbol,
+        isPending: true,
+        txHash: null,
+      });
+      setSelectedMove(null);
+      void submitMove(gameId, boardIndex, cellIndex, symbol);
+    } finally {
+      setIsConfirmingSelection(false);
+    }
+  }
+
+  function handleCancelSelectedMove() {
+    setSelectedMove(null);
   }
 
   function handleNewGame() {
     clearGame();
     setOpponentAddress("");
     setGameStarted(false);
-    setBoard(Array(9).fill(null));
-    setCurrentPlayer("X");
+    setGame(null);
     setMyRole(null);
     setPendingMove(null);
+    setSelectedMove(null);
+    setIsConfirmingSelection(false);
+    setSyncStale(false);
   }
 
-  function getStatusText(): string {
+  const statusText = useMemo(() => {
     if (creatingGame) return "Waiting for game to be created…";
-    if (activePendingMove?.isPending) return "Waiting for move confirmation…";
-    if (activePendingMove) return "Move confirmed. Syncing board…";
-    if (winner) return `Winner: ${winner}`;
-    if (isDraw) return "Draw";
+    if (activePendingMove?.isPending)
+      return "Waiting for move confirmation…";
+    if (syncStale && currentGameId != null)
+      return "Could not load game state. Showing last known board.";
+    if (!game) {
+      if (gameStarted && currentGameId != null) return "Loading game…";
+      return "Enter an address to start";
+    }
+    if (game.status === 1) return "Winner: X";
+    if (game.status === 2) return "Winner: O";
+    if (game.status === 3) return "Draw";
     if (!gameStarted) return "Enter an address to start";
     if (!myRole) return "Waiting for players";
-    return isMyTurn
-      ? `Your turn (${myRole})`
-      : `Opponent's turn (${currentPlayer})`;
-  }
-  const statusText = getStatusText();
+
+    const nb = game.next_board;
+    const forcedLabel =
+      nb !== 9 ? ` (play in board ${nb + 1})` : " (play anywhere)";
+    const oppForced =
+      nb !== 9 ? ` (board ${nb + 1})` : " (any board)";
+
+    if (isMyTurn) {
+      return `Your turn${forcedLabel}`;
+    }
+    return `Opponent's turn${oppForced}`;
+  }, [
+    creatingGame,
+    activePendingMove?.isPending,
+    syncStale,
+    currentGameId,
+    game,
+    gameStarted,
+    myRole,
+    isMyTurn,
+  ]);
+
+  const showConfirmPanel = useMemo(
+    () =>
+      selectedMove != null &&
+      currentGameId != null &&
+      selectedMove.gameId === currentGameId &&
+      !activePendingMove &&
+      game?.status === 0,
+    [selectedMove, currentGameId, activePendingMove, game?.status]
+  );
+
+  const boardSelectedCoords = useMemo(() => {
+    if (
+      !selectedMove ||
+      currentGameId == null ||
+      selectedMove.gameId !== currentGameId ||
+      activePendingMove ||
+      isConfirmingSelection
+    ) {
+      return null;
+    }
+    return {
+      boardIndex: selectedMove.boardIndex,
+      cellIndex: selectedMove.cellIndex,
+    };
+  }, [selectedMove, currentGameId, activePendingMove, isConfirmingSelection]);
+
   if (!account?.address) {
     return <AccountGate />;
   }
+
+  const boardDisabled =
+    !gameStarted ||
+    !game ||
+    game.status !== 0 ||
+    !isMyTurn ||
+    !!activePendingMove ||
+    isConfirmingSelection;
 
   return (
     <KeyboardAvoidingView
@@ -484,6 +676,8 @@ export default function PlayScreen() {
                   accessibilityRole="button"
                   onPress={() => {
                     loadGame(inv.id);
+                    setSelectedMove(null);
+                    setIsConfirmingSelection(false);
                     setGameStarted(true);
                   }}
                   style={({ pressed }) => [
@@ -507,16 +701,82 @@ export default function PlayScreen() {
           </View>
         </View>
 
+        {showConfirmPanel && selectedMove ? (
+          <View
+            style={[
+              styles.confirmPanel,
+              {
+                borderColor:
+                  colorScheme === "dark"
+                    ? "rgba(255,255,255,0.22)"
+                    : "rgba(127,127,127,0.4)",
+              },
+            ]}
+          >
+            <Text style={styles.confirmTitle}>Confirm move</Text>
+            <Text style={styles.confirmBody}>
+              Place {selectedMove.symbol} in board {selectedMove.boardIndex + 1},
+              cell {selectedMove.cellIndex + 1}
+            </Text>
+            <View style={styles.confirmActions}>
+              <Pressable
+                accessibilityRole="button"
+                disabled={isConfirmingSelection}
+                onPress={handleCancelSelectedMove}
+                style={({ pressed }) => [
+                  styles.confirmButtonSecondary,
+                  {
+                    borderColor:
+                      colorScheme === "dark"
+                        ? "rgba(255,255,255,0.25)"
+                        : "rgba(127,127,127,0.4)",
+                    opacity:
+                      isConfirmingSelection ? 0.45 : pressed ? 0.85 : 1,
+                  },
+                ]}
+              >
+                <Text style={styles.confirmButtonSecondaryText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                disabled={isConfirmingSelection}
+                onPress={() => void handleConfirmSelectedMove()}
+                style={({ pressed }) => [
+                  styles.confirmButtonPrimary,
+                  {
+                    backgroundColor: tint,
+                    opacity:
+                      isConfirmingSelection ? 0.85 : pressed ? 0.9 : 1,
+                  },
+                ]}
+              >
+                {isConfirmingSelection ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.confirmButtonPrimaryText}>
+                    Confirm move
+                  </Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
         <TicTacToeBoard
-          board={boardWithPendingMove}
+          boards={boardsArray}
+          nextBoard={game?.next_board ?? 9}
           onCellPress={handleCellPress}
-          disabled={
-            !gameStarted || !!winner || !isMyTurn || !!activePendingMove
+          disabled={boardDisabled}
+          selectedMove={boardSelectedCoords}
+          pendingMove={
+            activePendingMove?.isPending
+              ? {
+                  boardIndex: activePendingMove.boardIndex,
+                  cellIndex: activePendingMove.cellIndex,
+                }
+              : null
           }
-          winningLine={winningLine}
-          pendingCellIndex={
-            activePendingMove?.isPending ? activePendingMove.cell : null
-          }
+          winningMetaLine={winningMetaLine}
           style={styles.board}
         />
 
@@ -579,9 +839,9 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   content: {
-    flex: 1,
     padding: 16,
     gap: 16,
+    paddingBottom: 32,
   },
   walletPanel: {
     marginTop: 50,
@@ -663,10 +923,55 @@ const styles = StyleSheet.create({
   status: {
     fontSize: 16,
     fontWeight: "600",
+    flex: 1,
+  },
+  confirmPanel: {
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth * 2,
+    gap: 10,
+  },
+  confirmTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  confirmBody: {
+    fontSize: 14,
+    opacity: 0.9,
+  },
+  confirmActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 4,
+  },
+  confirmButtonPrimary: {
+    flex: 1,
+    height: 40,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  confirmButtonPrimaryText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  confirmButtonSecondary: {
+    flex: 1,
+    height: 40,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: StyleSheet.hairlineWidth * 2,
+  },
+  confirmButtonSecondaryText: {
+    fontSize: 15,
+    fontWeight: "600",
   },
   board: {
     marginTop: 8,
-    marginBottom: 96,
+    marginBottom: 24,
   },
   newGameButton: {
     marginTop: 16,

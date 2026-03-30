@@ -174,9 +174,11 @@ function registerTsCartridgeAdapter(
         );
 
         if (authResult.type === "success") {
-          const callbackUrl =
+          const sessionCallbackUrl =
             "url" in authResult && authResult.url ? authResult.url : undefined;
-          return { status: "success", callbackUrl };
+          return sessionCallbackUrl
+            ? { status: "success", callbackUrl: sessionCallbackUrl }
+            : { status: "success" };
         }
 
         return { status: authResult.type === "cancel" ? "cancel" : "dismiss" };
@@ -368,7 +370,9 @@ export const StarknetConnectorProvider: React.FC<{
         }
 
         const receipt = await getReceiptIfAvailable(provider, txHash);
-        return { success: false, reverted: true, receipt };
+        return receipt
+          ? { success: false, reverted: true, receipt }
+          : { success: false, reverted: true };
       }
     },
     [provider]
