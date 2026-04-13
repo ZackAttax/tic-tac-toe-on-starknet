@@ -6,8 +6,9 @@
 //!
 //! ## ERC20 / escrow v1 assumptions
 //!
-//! The reference escrow in this repo (`wager_escrow`) enforces a **single approved token** at
-//! deployment and treats **token decimals as a display concern** off-chain. **Fee-on-transfer**,
+//! The reference escrow in this repo (`wager_escrow`) enforces a **single approved token** and a
+//! **constructor-seeded adapter allowlist** (no post-deploy governance in v1). It applies
+//! **optional protocol fees on wins only** (`fee_bps` / `fee_recipient` at deploy). **Fee-on-transfer**,
 //! **rebasing**, and other balance-manipulating or non-standard ERC20 behaviors are **unsupported**:
 //! stakes and payouts are accounted in raw `u256` amounts; misbehaving tokens can cause stuck funds
 //! or incorrect settlement.
@@ -81,6 +82,9 @@ pub struct WagerConfig {
     pub token: ContractAddress,
     pub stake: u256,
     pub deadlines: WagerDeadlines,
+    /// If non-zero, only this address may `accept`; if zero, any address except the creator may
+    /// accept.
+    pub designated_opponent: ContractAddress,
     pub game_params: Array<felt252>,
 }
 

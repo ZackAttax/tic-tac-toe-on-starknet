@@ -28,7 +28,12 @@ fn test_wager_config_serde_roundtrip() {
     let deadlines = WagerDeadlines { accept_by: 10_u64, resolve_by: 99_u64 };
     let game_params = array![7_felt252, 8_felt252, 9_felt252];
     let config = WagerConfig {
-        game_adapter: addr(1), token: addr(2), stake: 42_u256, deadlines, game_params,
+        game_adapter: addr(1),
+        token: addr(2),
+        stake: 42_u256,
+        deadlines,
+        designated_opponent: addr(0),
+        game_params,
     };
 
     let mut serialized = array![];
@@ -46,6 +51,7 @@ fn test_wager_config_serde_roundtrip() {
     assert(restored.stake == config.stake, 'stake');
     assert(restored.deadlines.accept_by == config.deadlines.accept_by, 'ab');
     assert(restored.deadlines.resolve_by == config.deadlines.resolve_by, 'rb');
+    assert(restored.designated_opponent == config.designated_opponent, 'desig');
     assert_felt_arrays_eq(restored.game_params, config.game_params);
 }
 
@@ -71,6 +77,7 @@ fn test_wager_record_serde_roundtrip() {
         token: addr(12),
         stake: 3_u256,
         deadlines,
+        designated_opponent: addr(0),
         game_params: array![100_felt252],
     };
     let rec = WagerRecord {
