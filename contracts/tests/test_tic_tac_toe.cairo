@@ -3,23 +3,34 @@ use core::option::OptionTrait;
 use core::traits::TryInto;
 use snforge_std::{
     ContractClassTrait, DeclareResultTrait, EventSpy, EventSpyAssertionsTrait, EventSpyTrait,
-    EventsFilterTrait, declare, spy_events, start_cheat_caller_address, stop_cheat_caller_address,
+    EventsFilterTrait, declare, spy_events, start_cheat_block_timestamp,
+    start_cheat_caller_address, stop_cheat_block_timestamp, stop_cheat_caller_address,
 };
 use starknet::ContractAddress;
 use tic_tac_toe::tic_tac_toe::tictactoe::{
-    Event, Game, GameCreated, GameDraw, GameMeta, GameWon, LocalBoard, MovePlayed,
+    Event, Game, GameCreated, GameDraw, GameMeta, GameWon, LocalBoard, MovePlayed, TimeoutClaimed,
 };
 use tic_tac_toe::tic_tac_toe::{
     ITicTacToeDispatcher, ITicTacToeDispatcherTrait, ITicTacToeSafeDispatcher,
     ITicTacToeSafeDispatcherTrait,
 };
 
-fn deploy_with_creator(game_creator: ContractAddress) -> ContractAddress {
+/// Default per-turn duration for tests (24h); large enough that normal tests never hit `turn_expired`.
+const DEFAULT_TEST_MOVE_TIMEOUT_SECS: u64 = 86400_u64;
+
+fn deploy_with_creator_and_timeout(
+    game_creator: ContractAddress, default_move_timeout_secs: u64,
+) -> ContractAddress {
     let contract = declare("tictactoe").unwrap().contract_class();
     let mut calldata = array![];
     calldata.append(game_creator.into());
+    calldata.append(default_move_timeout_secs.into());
     let (addr, _) = contract.deploy(@calldata).unwrap();
     addr
+}
+
+fn deploy_with_creator(game_creator: ContractAddress) -> ContractAddress {
+    deploy_with_creator_and_timeout(game_creator, DEFAULT_TEST_MOVE_TIMEOUT_SECS)
 }
 
 fn deploy() -> ContractAddress {
@@ -115,6 +126,8 @@ fn assert_meta_eq(a: GameMeta, b: GameMeta) {
     assert(a.meta_o_bits == b.meta_o_bits, 'm_mo');
     assert(a.completed_locals == b.completed_locals, 'm_cl');
     assert(a.wager_id == b.wager_id, 'm_wid');
+    assert(a.move_timeout_secs == b.move_timeout_secs, 'm_mts');
+    assert(a.turn_deadline == b.turn_deadline, 'm_td');
 }
 
 #[test]
@@ -148,6 +161,9 @@ fn test_create_initial_state() {
     assert_contract_events_exclude_first_key(
         ref spy, contract_address, selector!("GameDraw"), 'no_draw_create',
     );
+    assert_contract_events_exclude_first_key(
+        ref spy, contract_address, selector!("TimeoutClaimed"), 'no_tc_create',
+    );
 
     let g = dispatcher.get_game(game_id);
     assert(g.player_x == P1, 'bad_x');
@@ -155,6 +171,8 @@ fn test_create_initial_state() {
     assert(g.turn == 0_u8, 'bad_turn');
     assert(g.status == 0_u8, 'bad_status');
     assert(g.next_board == 9_u8, 'bad_next');
+    assert(g.move_timeout_secs == DEFAULT_TEST_MOVE_TIMEOUT_SECS, 'bad_mts');
+    assert(g.turn_deadline == DEFAULT_TEST_MOVE_TIMEOUT_SECS, 'bad_td');
     let mut i: u8 = 0_u8;
     loop {
         if i > 8_u8 {
@@ -1336,16 +1354,134 @@ fn test_create_game_for_rejects_bad_wager() {
 
 #[feature("safe_dispatcher")]
 #[test]
-fn test_create_game_for_rejects_nonempty_config() {
+fn test_create_game_for_rejects_bad_config_len() {
     let contract_address = deploy();
     let safe = ITicTacToeSafeDispatcher { contract_address };
 
     start_cheat_caller_address(contract_address, P3);
-    match safe.create_game_for(P1, P2, 1_u64, array![1_felt252]) {
+    match safe.create_game_for(P1, P2, 1_u64, array![1_felt252, 2_felt252]) {
         Result::Ok(_) => core::panic_with_felt252('expect_revert'),
         Result::Err(panic_data) => assert_revert_with_felt252(panic_data, 'bad_config'),
     }
     stop_cheat_caller_address(contract_address);
+}
+
+#[feature("safe_dispatcher")]
+#[test]
+fn test_create_game_for_rejects_zero_timeout_in_config() {
+    let contract_address = deploy();
+    let safe = ITicTacToeSafeDispatcher { contract_address };
+
+    start_cheat_caller_address(contract_address, P3);
+    match safe.create_game_for(P1, P2, 1_u64, array![0_felt252]) {
+        Result::Ok(_) => core::panic_with_felt252('expect_revert'),
+        Result::Err(panic_data) => assert_revert_with_felt252(panic_data, 'bad_timeout'),
+    }
+    stop_cheat_caller_address(contract_address);
+}
+
+#[test]
+fn test_deploy_rejects_zero_default_timeout() {
+    let contract = declare("tictactoe").unwrap().contract_class();
+    let mut calldata = array![];
+    calldata.append(P3.into());
+    calldata.append(0_u64.into());
+    match contract.deploy(@calldata) {
+        Result::Ok(_) => core::panic_with_felt252('expect_deploy_fail'),
+        Result::Err(_) => {},
+    }
+}
+
+#[test]
+fn test_deploy_rejects_zero_game_creator() {
+    let contract = declare("tictactoe").unwrap().contract_class();
+    let mut calldata = array![];
+    calldata.append(P0.into());
+    calldata.append(86400_u64.into());
+    match contract.deploy(@calldata) {
+        Result::Ok(_) => core::panic_with_felt252('expect_deploy_fail'),
+        Result::Err(_) => {},
+    }
+}
+
+/// At `block_timestamp == turn_deadline`, `play_move` succeeds and `claim_timeout` reverts.
+#[feature("safe_dispatcher")]
+#[test]
+fn test_deadline_boundary_inclusive_play_exclusive_claim() {
+    let short_secs: u64 = 100_u64;
+    let contract_address = deploy_with_creator_and_timeout(P3, short_secs);
+    let dispatcher = ITicTacToeDispatcher { contract_address };
+    let safe = ITicTacToeSafeDispatcher { contract_address };
+
+    start_cheat_caller_address(contract_address, P1);
+    let game_id = dispatcher.create_game(P2);
+    stop_cheat_caller_address(contract_address);
+
+    let deadline = dispatcher.get_game_meta(game_id).turn_deadline;
+
+    start_cheat_block_timestamp(contract_address, deadline);
+    start_cheat_caller_address(contract_address, P3);
+    match safe.claim_timeout(game_id) {
+        Result::Ok(_) => core::panic_with_felt252('claim_at_deadline'),
+        Result::Err(panic_data) => assert_revert_with_felt252(panic_data, 'not_expired'),
+    }
+    stop_cheat_caller_address(contract_address);
+
+    start_cheat_caller_address(contract_address, P1);
+    dispatcher.play_move(game_id, 0_u8, 0_u8);
+    stop_cheat_caller_address(contract_address);
+    stop_cheat_block_timestamp(contract_address);
+
+    assert(dispatcher.get_result(game_id) == 0_u8, 'still_on');
+}
+
+#[feature("safe_dispatcher")]
+#[test]
+fn test_after_deadline_play_reverts_claim_succeeds() {
+    let short_secs: u64 = 50_u64;
+    let contract_address = deploy_with_creator_and_timeout(P3, short_secs);
+    let dispatcher = ITicTacToeDispatcher { contract_address };
+    let safe = ITicTacToeSafeDispatcher { contract_address };
+
+    start_cheat_caller_address(contract_address, P1);
+    let game_id = dispatcher.create_game(P2);
+    stop_cheat_caller_address(contract_address);
+
+    let deadline = dispatcher.get_game_meta(game_id).turn_deadline;
+    let after = deadline + 1_u64;
+
+    start_cheat_block_timestamp(contract_address, after);
+    start_cheat_caller_address(contract_address, P1);
+    match safe.play_move(game_id, 0_u8, 0_u8) {
+        Result::Ok(_) => core::panic_with_felt252('play_after_exp'),
+        Result::Err(panic_data) => assert_revert_with_felt252(panic_data, 'turn_expired'),
+    }
+    stop_cheat_caller_address(contract_address);
+
+    let mut spy = spy_events();
+    start_cheat_caller_address(contract_address, P2);
+    dispatcher.claim_timeout(game_id);
+    stop_cheat_caller_address(contract_address);
+    stop_cheat_block_timestamp(contract_address);
+
+    assert(dispatcher.get_result(game_id) == 2_u8, 'o_wins');
+    spy
+        .assert_emitted(
+            @array![
+                (
+                    contract_address,
+                    Event::TimeoutClaimed(
+                        TimeoutClaimed {
+                            game_id,
+                            winner: P2,
+                            loser: P1,
+                            status: 2_u8,
+                            turn_deadline: deadline,
+                        },
+                    ),
+                ),
+            ],
+        );
 }
 
 #[feature("safe_dispatcher")]

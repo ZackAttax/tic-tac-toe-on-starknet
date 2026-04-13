@@ -27,8 +27,29 @@ export type Game = {
   next_board: number; // 0..8 forced, 9 = free choice
   turn: number; // 0 = X, 1 = O
   status: number; // 0 ongoing, 1 X won, 2 O won, 3 draw
+  /** Per-turn duration in seconds (fixed for the match); `bigint` matches full on-chain `u64`. */
+  move_timeout_secs: bigint;
+  /** Unix seconds (inclusive): current player may play while `now <= turn_deadline`; `bigint` matches full on-chain `u64`. */
+  turn_deadline: bigint;
   gameId: GameId;
 };
+
+/** Block time as integer seconds for deadline comparisons (matches Cairo `u64` timestamps). */
+function chainNowBigInt(nowUnixSecs: number): bigint | null {
+  if (!Number.isFinite(nowUnixSecs) || nowUnixSecs < 0) return null;
+  return BigInt(Math.floor(nowUnixSecs));
+}
+
+/** True when the chain clock is past the inclusive move deadline (matches `claim_timeout`). */
+export function isTurnExpired(
+  game: Pick<Game, "status" | "turn_deadline">,
+  nowUnixSecs: number
+): boolean {
+  if (game.status !== 0) return false;
+  const now = chainNowBigInt(nowUnixSecs);
+  if (now === null) return false;
+  return now > game.turn_deadline;
+}
 
 const META_LINES: ReadonlyArray<readonly [number, number, number]> = [
   [0, 1, 2],
@@ -109,11 +130,17 @@ export function isCellPlayable(args: {
   boardIndex: number;
   cellIndex: number;
   hasPendingMove: boolean;
+  /** Latest Starknet block timestamp (seconds); required for deadline gating. */
+  nowUnixSecs: number;
 }): boolean {
-  const { game, myRole, boardIndex, cellIndex, hasPendingMove } = args;
+  const { game, myRole, boardIndex, cellIndex, hasPendingMove, nowUnixSecs } =
+    args;
   if (hasPendingMove) return false;
   if (game.status !== 0) return false;
   if (myRole == null) return false;
+  const now = chainNowBigInt(nowUnixSecs);
+  if (now === null) return false;
+  if (now > game.turn_deadline) return false;
   const current: "X" | "O" = game.turn === 0 ? "X" : "O";
   if (current !== myRole) return false;
 

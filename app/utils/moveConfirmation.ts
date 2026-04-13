@@ -31,7 +31,8 @@ export function myRoleFromGame(game: Game, myAddress: string): MyRole {
 export function isSelectionPlayableAfterSync(
   fresh: Game,
   myAddress: string,
-  selection: { boardIndex: number; cellIndex: number }
+  selection: { boardIndex: number; cellIndex: number },
+  nowUnixSecs: number
 ): boolean {
   if (fresh.status !== 0) return false;
   const role = myRoleFromGame(fresh, myAddress);
@@ -41,6 +42,7 @@ export function isSelectionPlayableAfterSync(
     boardIndex: selection.boardIndex,
     cellIndex: selection.cellIndex,
     hasPendingMove: false,
+    nowUnixSecs,
   });
 }
 
@@ -54,13 +56,19 @@ export function shouldSubmitAfterPreflight(args: {
   fresh: Game | null;
   myAddress: string;
   selection: { boardIndex: number; cellIndex: number };
+  nowUnixSecs: number;
 }): PreflightSubmitDecision {
   if (!args.fresh) return { ok: false, reason: "sync_failed" };
   if (args.activeGameId !== args.startedGameId) {
     return { ok: false, reason: "game_changed" };
   }
   if (
-    !isSelectionPlayableAfterSync(args.fresh, args.myAddress, args.selection)
+    !isSelectionPlayableAfterSync(
+      args.fresh,
+      args.myAddress,
+      args.selection,
+      args.nowUnixSecs
+    )
   ) {
     return { ok: false, reason: "not_playable" };
   }

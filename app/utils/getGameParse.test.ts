@@ -3,6 +3,7 @@ import {
   EXPECTED_GET_GAME_FLAT_LEN,
   normalizeBoardSet,
   parseCallContractGameResult,
+  toUint64BigInt,
 } from "@/utils/getGameParse";
 import type { BoardSet } from "@/utils/ultimateTicTacToe";
 
@@ -27,13 +28,13 @@ function emptyBoardSet(): BoardSet {
   };
 }
 
-/** 32 felts: addresses, 9×(x_bits,o_bits,status), next_board, turn, game_status */
+/** 34 felts: addresses, 9×(x_bits,o_bits,status), next_board, turn, status, move_timeout_secs, turn_deadline */
 function sampleFlatFelts(): unknown[] {
   const row: unknown[] = [1n, 2n];
   for (let i = 0; i < 9; i++) {
     row.push(0, 0, 0);
   }
-  row.push(9, 0, 0);
+  row.push(9, 0, 0, 86400n, 999_999_999n);
   expect(row.length).toBe(EXPECTED_GET_GAME_FLAT_LEN);
   return row;
 }
@@ -48,6 +49,8 @@ describe("parseCallContractGameResult", () => {
       next_board: 9,
       turn: 0,
       status: 0,
+      move_timeout_secs: 86400n,
+      turn_deadline: 999_999_999n,
     };
     const g = parseCallContractGameResult(raw, GAME_ID);
     expect(g).not.toBeNull();
@@ -66,6 +69,8 @@ describe("parseCallContractGameResult", () => {
         next_board: 4,
         turn: 1,
         status: 0,
+        move_timeout_secs: 86400n,
+        turn_deadline: 999_999_999n,
       },
     };
     const g = parseCallContractGameResult(raw, GAME_ID);
@@ -74,7 +79,7 @@ describe("parseCallContractGameResult", () => {
     expect(g!.turn).toBe(1);
   });
 
-  it("parses flat 32-felt array", () => {
+  it("parses flat 34-felt array", () => {
     const g = parseCallContractGameResult(sampleFlatFelts(), GAME_ID);
     expect(g).not.toBeNull();
     expect(g!.next_board).toBe(9);
@@ -82,9 +87,9 @@ describe("parseCallContractGameResult", () => {
     expect(g!.status).toBe(0);
   });
 
-  it("returns null for flat array with wrong length (31 felts, fail-closed)", () => {
-    const truncated = sampleFlatFelts().slice(0, 31);
-    expect(truncated.length).toBe(31);
+  it("returns null for flat array with wrong length (33 felts, fail-closed)", () => {
+    const truncated = sampleFlatFelts().slice(0, 33);
+    expect(truncated.length).toBe(33);
     expect(parseCallContractGameResult(truncated, GAME_ID)).toBeNull();
   });
 
@@ -98,6 +103,8 @@ describe("parseCallContractGameResult", () => {
       next_board: 9,
       turn: 0,
       status: 0,
+      move_timeout_secs: 86400n,
+      turn_deadline: 999_999_999n,
     };
     expect(parseCallContractGameResult(raw, GAME_ID)).toBeNull();
   });
@@ -111,8 +118,23 @@ describe("parseCallContractGameResult", () => {
       next_board: 9,
       turn: 0,
       status: "not-a-number",
+      move_timeout_secs: 86400n,
+      turn_deadline: 999_999_999n,
     };
     expect(parseCallContractGameResult(raw, GAME_ID)).toBeNull();
+  });
+});
+
+describe("toUint64BigInt", () => {
+  it("accepts full u64 max without Number rounding", () => {
+    const max = (1n << 64n) - 1n;
+    expect(toUint64BigInt(max)).toBe(max);
+    expect(toUint64BigInt(String(max))).toBe(max);
+  });
+
+  it("rejects values above u64 max", () => {
+    const over = 1n << 64n;
+    expect(toUint64BigInt(over)).toBeNull();
   });
 });
 

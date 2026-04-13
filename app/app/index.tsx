@@ -31,6 +31,7 @@ import {
   isCellPlayable,
   isPendingMoveConfirmedOnChain,
   isSameMove,
+  isTurnExpired,
 } from "@/utils/ultimateTicTacToe";
 
 type SelectedMove = {
@@ -56,7 +57,7 @@ function emptyBoardsArray(): LocalBoard[] {
 }
 
 export default function PlayScreen() {
-  const { account, disconnectAccount, waitForTransaction } =
+  const { account, disconnectAccount, waitForTransaction, provider } =
     useStarknetConnector();
   const [opponentAddress, setOpponentAddress] = useState("");
   const [game, setGame] = useState<Game | null>(null);
@@ -70,6 +71,7 @@ export default function PlayScreen() {
   const {
     createGame,
     playMove,
+    claimTimeout,
     getGame,
     currentGameId,
     loadGame,
@@ -89,10 +91,42 @@ export default function PlayScreen() {
   const colorScheme = useColorScheme() ?? "light";
   const tint = Colors[colorScheme].tint;
 
+  const [chainNowSecs, setChainNowSecs] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!provider) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const block = await provider.getBlock("latest");
+        const ts = block?.timestamp;
+        if (!cancelled && ts != null && ts !== undefined) {
+          setChainNowSecs(Number(ts));
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 12_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [provider]);
+
   const myAddress = useMemo(
     () => normalizeAddress(account?.address || ""),
     [account?.address]
   );
+
+  const chainClock = chainNowSecs ?? -1;
+
+  const moveDeadlinePassed =
+    game != null &&
+    game.status === 0 &&
+    chainNowSecs != null &&
+    isTurnExpired(game, chainNowSecs);
 
   const activePendingMove =
     pendingMove?.gameId === currentGameId ? pendingMove : null;
@@ -154,11 +188,12 @@ export default function PlayScreen() {
           boardIndex: current.boardIndex,
           cellIndex: current.cellIndex,
           hasPendingMove: false,
+          nowUnixSecs: chainClock,
         });
         return stillPlayable ? current : null;
       });
     },
-    [myAddress]
+    [myAddress, chainClock]
   );
 
   const syncGame = useCallback(
@@ -244,6 +279,28 @@ export default function PlayScreen() {
     },
     [playMove, syncGame, waitForTransaction]
   );
+
+  const [claimingTimeout, setClaimingTimeout] = useState(false);
+
+  const handleClaimTimeout = useCallback(async () => {
+    if (currentGameId == null || claimingTimeout) return;
+    setClaimingTimeout(true);
+    try {
+      const txHash = await claimTimeout(currentGameId);
+      if (!txHash) return;
+      const txResult = await waitForTransaction(txHash);
+      if (!txResult.success) return;
+      await syncGame(currentGameId);
+    } finally {
+      setClaimingTimeout(false);
+    }
+  }, [
+    currentGameId,
+    claimTimeout,
+    claimingTimeout,
+    waitForTransaction,
+    syncGame,
+  ]);
 
   useEffect(() => {
     if (currentGameId == null) return;
@@ -397,6 +454,7 @@ export default function PlayScreen() {
       boardIndex,
       cellIndex,
       hasPendingMove: !!activePendingMove,
+      nowUnixSecs: chainClock,
     });
     if (!playable) return;
 
@@ -446,6 +504,7 @@ export default function PlayScreen() {
           boardIndex: sel.boardIndex,
           cellIndex: sel.cellIndex,
         },
+        nowUnixSecs: chainClock,
       });
 
       if (!decision.ok) {
@@ -505,6 +564,14 @@ export default function PlayScreen() {
     if (!gameStarted) return "Enter an address to start";
     if (!myRole) return "Waiting for players";
 
+    if (
+      game.status === 0 &&
+      chainNowSecs != null &&
+      isTurnExpired(game, chainNowSecs)
+    ) {
+      return "Move deadline passed — claim timeout to finish";
+    }
+
     const nb = game.next_board;
     const forcedLabel =
       nb !== 9 ? ` (play in board ${nb + 1})` : " (play anywhere)";
@@ -524,6 +591,7 @@ export default function PlayScreen() {
     gameStarted,
     myRole,
     isMyTurn,
+    chainNowSecs,
   ]);
 
   const showConfirmPanel = useMemo(
@@ -562,7 +630,8 @@ export default function PlayScreen() {
     game.status !== 0 ||
     !isMyTurn ||
     !!activePendingMove ||
-    isConfirmingSelection;
+    isConfirmingSelection ||
+    moveDeadlinePassed;
 
   return (
     <KeyboardAvoidingView
@@ -621,6 +690,35 @@ export default function PlayScreen() {
             <Text style={styles.label}>Game ID</Text>
             <Text selectable style={styles.gameIdValue}>
               {String(currentGameId)}
+            </Text>
+          </View>
+        )}
+
+        {moveDeadlinePassed && currentGameId != null && (
+          <View style={{ marginBottom: 12 }}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => void handleClaimTimeout()}
+              disabled={claimingTimeout}
+              style={({ pressed }) => [
+                styles.startButton,
+                {
+                  backgroundColor: tint,
+                  opacity: claimingTimeout ? 0.5 : pressed ? 0.85 : 1,
+                  marginBottom: 4,
+                },
+              ]}
+            >
+              {claimingTimeout ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={{ color: "#fff", fontWeight: "600" }}>
+                  Claim timeout win
+                </Text>
+              )}
+            </Pressable>
+            <Text style={{ fontSize: 12, opacity: 0.8 }}>
+              The current player did not move in time. Anyone may finalize.
             </Text>
           </View>
         )}

@@ -4,6 +4,14 @@
 //! **Stable import path:** consume types and traits from `tic_tac_toe::protocol` (e.g.
 //! `tic_tac_toe::protocol::WagerConfig`, `tic_tac_toe::protocol::IWagerEscrow`).
 //!
+//! ## ERC20 / escrow v1 assumptions
+//!
+//! The reference escrow in this repo (`wager_escrow`) enforces a **single approved token** at
+//! deployment and treats **token decimals as a display concern** off-chain. **Fee-on-transfer**,
+//! **rebasing**, and other balance-manipulating or non-standard ERC20 behaviors are **unsupported**:
+//! stakes and payouts are accounted in raw `u256` amounts; misbehaving tokens can cause stuck funds
+//! or incorrect settlement.
+//!
 //! ## Adapter address invariant (`game_adapter` vs `MatchRef.adapter`)
 //!
 //! `WagerConfig.game_adapter` is the **authoritative** adapter contract for the wager: it is chosen
@@ -24,7 +32,8 @@
 use starknet::ContractAddress;
 
 /// Normalized match outcome for escrow settlement (adapter is source of truth).
-#[derive(Copy, Drop, Serde)]
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
+#[allow(starknet::store_no_default_variant)]
 pub enum MatchOutcome {
     None,
     CreatorWin,
@@ -35,7 +44,8 @@ pub enum MatchOutcome {
 }
 
 /// Lifecycle state of a wager held by escrow.
-#[derive(Copy, Drop, Serde)]
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
+#[allow(starknet::store_no_default_variant)]
 pub enum WagerStatus {
     Open,
     Matched,
@@ -66,7 +76,8 @@ pub struct WagerConfig {
     /// Authoritative adapter for this wager; `MatchRef.adapter` MUST match when a match is set (see
     /// module docs).
     pub game_adapter: ContractAddress,
-    /// ERC-20 token used for stakes; zero address if policy differs in a future revision.
+    /// ERC-20 token used for stakes; must be non-zero and must equal the escrow `approved_token`
+    /// for this codebase’s escrow (v1 single-token policy). Fee-on-transfer / rebasing unsupported.
     pub token: ContractAddress,
     pub stake: u256,
     pub deadlines: WagerDeadlines,

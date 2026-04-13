@@ -45,6 +45,10 @@ EXPO_PUBLIC_AVNU_API_KEY=
 - `npm run ios` — run on the iOS simulator
 - `npm run android` — run on the Android emulator
 
+## Wager escrow and tokens (v1)
+
+The `wager_escrow` contract escrows stakes in **one** ERC20: the deploy-time `approved_token` (must be a non-zero address). Every wager’s `WagerConfig.token` must match that address. **Fee-on-transfer**, **rebasing**, and other non-standard balance semantics are unsupported; raw `u256` amounts are used on-chain and **decimals are a display concern** for clients. Run Cairo tests with `cd contracts && snforge test`.
+
 ## Deploy to Sepolia
 
 This project includes a helper script to build, declare, and deploy the contract to Starknet Sepolia.

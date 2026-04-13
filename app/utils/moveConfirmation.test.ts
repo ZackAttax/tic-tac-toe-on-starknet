@@ -26,6 +26,9 @@ function emptyBoardSet(): BoardSet {
   };
 }
 
+const TEST_NOW = 1_000_000;
+const FAR_DEADLINE = BigInt(TEST_NOW + 86400);
+
 function baseGame(over: Partial<Game>): Game {
   return {
     player_x: "0x1",
@@ -34,6 +37,8 @@ function baseGame(over: Partial<Game>): Game {
     next_board: 9,
     turn: 0,
     status: 0,
+    move_timeout_secs: 86400n,
+    turn_deadline: FAR_DEADLINE,
     gameId: "1",
     ...over,
   };
@@ -76,6 +81,7 @@ describe("shouldSubmitAfterPreflight", () => {
         fresh: null,
         myAddress: meX,
         selection: { boardIndex: 4, cellIndex: 4 },
+        nowUnixSecs: TEST_NOW,
       })
     ).toEqual({ ok: false, reason: "sync_failed" });
   });
@@ -89,6 +95,7 @@ describe("shouldSubmitAfterPreflight", () => {
         fresh: g,
         myAddress: meX,
         selection: { boardIndex: 4, cellIndex: 4 },
+        nowUnixSecs: TEST_NOW,
       })
     ).toEqual({ ok: false, reason: "game_changed" });
   });
@@ -102,6 +109,7 @@ describe("shouldSubmitAfterPreflight", () => {
         fresh: g,
         myAddress: meX,
         selection: { boardIndex: 4, cellIndex: 4 },
+        nowUnixSecs: TEST_NOW,
       })
     ).toEqual({ ok: true });
   });
@@ -115,6 +123,7 @@ describe("shouldSubmitAfterPreflight", () => {
         fresh: g,
         myAddress: meX,
         selection: { boardIndex: 4, cellIndex: 4 },
+        nowUnixSecs: TEST_NOW,
       })
     ).toEqual({ ok: false, reason: "not_playable" });
   });
@@ -126,28 +135,28 @@ describe("isSelectionPlayableAfterSync", () => {
   it("returns true when free play and cell empty on X turn", () => {
     const g = baseGame({ turn: 0, next_board: 9 });
     expect(
-      isSelectionPlayableAfterSync(g, meX, { boardIndex: 4, cellIndex: 4 })
+      isSelectionPlayableAfterSync(g, meX, { boardIndex: 4, cellIndex: 4 }, TEST_NOW)
     ).toBe(true);
   });
 
   it("returns false when it is opponent turn", () => {
     const g = baseGame({ turn: 1, next_board: 9 });
     expect(
-      isSelectionPlayableAfterSync(g, meX, { boardIndex: 4, cellIndex: 4 })
+      isSelectionPlayableAfterSync(g, meX, { boardIndex: 4, cellIndex: 4 }, TEST_NOW)
     ).toBe(false);
   });
 
   it("returns false when game is terminal", () => {
     const g = baseGame({ status: 1 });
     expect(
-      isSelectionPlayableAfterSync(g, meX, { boardIndex: 0, cellIndex: 0 })
+      isSelectionPlayableAfterSync(g, meX, { boardIndex: 0, cellIndex: 0 }, TEST_NOW)
     ).toBe(false);
   });
 
   it("returns false when forced board does not match", () => {
     const g = baseGame({ turn: 0, next_board: 3 });
     expect(
-      isSelectionPlayableAfterSync(g, meX, { boardIndex: 4, cellIndex: 0 })
+      isSelectionPlayableAfterSync(g, meX, { boardIndex: 4, cellIndex: 0 }, TEST_NOW)
     ).toBe(false);
   });
 
@@ -156,7 +165,18 @@ describe("isSelectionPlayableAfterSync", () => {
     boards.b4 = { x_bits: 1, o_bits: 0, status: 0 };
     const g = baseGame({ boards, turn: 0, next_board: 9 });
     expect(
-      isSelectionPlayableAfterSync(g, meX, { boardIndex: 4, cellIndex: 0 })
+      isSelectionPlayableAfterSync(g, meX, { boardIndex: 4, cellIndex: 0 }, TEST_NOW)
+    ).toBe(false);
+  });
+
+  it("returns false when turn deadline has expired", () => {
+    const g = baseGame({
+      turn: 0,
+      next_board: 9,
+      turn_deadline: BigInt(TEST_NOW - 1),
+    });
+    expect(
+      isSelectionPlayableAfterSync(g, meX, { boardIndex: 4, cellIndex: 4 }, TEST_NOW)
     ).toBe(false);
   });
 });

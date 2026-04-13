@@ -236,6 +236,7 @@ function getTicTacToePolicies() {
   return [
     { target: contractAddress, method: "create_game" },
     { target: contractAddress, method: "play_move" },
+    { target: contractAddress, method: "claim_timeout" },
   ];
 }
 

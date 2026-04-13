@@ -32,6 +32,8 @@ function baseGame(over: Partial<Game>): Game {
     next_board: 9,
     turn: 0,
     status: 0,
+    move_timeout_secs: 86400n,
+    turn_deadline: 9_999_999_999n,
     gameId: "1",
     ...over,
   };

@@ -29,6 +29,25 @@ const toNum = (v: unknown): number => {
   return Number.isFinite(n) ? n : NaN;
 };
 
+const U64_MAX = (1n << 64n) - 1n;
+
+/** On-chain `u64` values without lossy conversion to `number` (avoids drift above `MAX_SAFE_INTEGER`). */
+export function toUint64BigInt(v: unknown): bigint | null {
+  if (typeof v === "bigint") {
+    if (v < 0n || v > U64_MAX) return null;
+    return v;
+  }
+  const s = toScalarString(v);
+  if (s === "") return null;
+  try {
+    const n = BigInt(s);
+    if (n < 0n || n > U64_MAX) return null;
+    return n;
+  } catch {
+    return null;
+  }
+}
+
 const toHexAddress = (v: unknown): string => {
   try {
     const b = BigInt(toScalarString(v));
@@ -141,7 +160,7 @@ export function normalizeBoardSet(raw: unknown): BoardSet | null {
   return null;
 }
 
-export const EXPECTED_GET_GAME_FLAT_LEN = 2 + 9 * 3 + 3; // 32
+export const EXPECTED_GET_GAME_FLAT_LEN = 2 + 9 * 3 + 3 + 2; // 34 (+ move_timeout_secs, turn_deadline)
 
 function parseGameFromFlatValues(values: unknown[], gameId: GameId): Game | null {
   if (values.length !== EXPECTED_GET_GAME_FLAT_LEN) {
@@ -161,10 +180,14 @@ function parseGameFromFlatValues(values: unknown[], gameId: GameId): Game | null
   const next_board = toNum(values[29]);
   const turn = toNum(values[30]);
   const status = toNum(values[31]);
+  const move_timeout_secs = toUint64BigInt(values[32]);
+  const turn_deadline = toUint64BigInt(values[33]);
   if (
     !Number.isFinite(next_board) ||
     !Number.isFinite(turn) ||
-    !Number.isFinite(status)
+    !Number.isFinite(status) ||
+    move_timeout_secs === null ||
+    turn_deadline === null
   ) {
     return null;
   }
@@ -175,6 +198,8 @@ function parseGameFromFlatValues(values: unknown[], gameId: GameId): Game | null
     next_board,
     turn,
     status,
+    move_timeout_secs,
+    turn_deadline,
     gameId,
   };
 }
@@ -190,10 +215,14 @@ function tryParseGameFromNestedObject(raw: unknown, gameId: GameId): Game | null
   const next_board = toNum(o.next_board);
   const turn = toNum(o.turn);
   const status = toNum(o.status);
+  const move_timeout_secs = toUint64BigInt(o.move_timeout_secs);
+  const turn_deadline = toUint64BigInt(o.turn_deadline);
   if (
     !Number.isFinite(next_board) ||
     !Number.isFinite(turn) ||
-    !Number.isFinite(status)
+    !Number.isFinite(status) ||
+    move_timeout_secs === null ||
+    turn_deadline === null
   ) {
     return null;
   }
@@ -204,13 +233,15 @@ function tryParseGameFromNestedObject(raw: unknown, gameId: GameId): Game | null
     next_board,
     turn,
     status,
+    move_timeout_secs,
+    turn_deadline,
     gameId,
   };
 }
 
 /**
  * Normalize starknet.js / RPC return shapes: top-level struct, `{ result }` as
- * array or struct, or 32-felt flat array.
+ * array or struct, or 34-felt flat array.
  */
 export function parseCallContractGameResult(
   raw: unknown,

@@ -31,6 +31,7 @@ type TicTacToeContextType = {
     boardIndex: number,
     cellIndex: number
   ) => Promise<string | null>;
+  claimTimeout: (gameId: GameId) => Promise<string | null>;
   getGame: (gameId: GameId) => Promise<Game | null>;
   loadGame: (gameId: GameId) => void;
   clearGame: () => void;
@@ -192,6 +193,27 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
     [contractAddress, wallet]
   );
 
+  const claimTimeout = useCallback(
+    async (gameId: GameId): Promise<string | null> => {
+      const normalizedGameId = normalizeGameId(gameId);
+      if (!contractAddress || !normalizedGameId) return null;
+      if (!wallet) return null;
+      try {
+        const call: Call = {
+          contractAddress,
+          entrypoint: "claim_timeout",
+          calldata: [normalizedGameId],
+        };
+        const tx = await wallet.execute([call]);
+        return tx.hash || null;
+      } catch (e) {
+        if (__DEV__) console.error("claim_timeout error", e);
+        return null;
+      }
+    },
+    [contractAddress, wallet]
+  );
+
   const loadGame = useCallback((gameId: GameId) => {
     const normalizedGameId = normalizeGameId(gameId);
     if (!normalizedGameId) return;
@@ -236,6 +258,7 @@ export const TicTacToeProvider: React.FC<{ children: React.ReactNode }> = ({
         currentGameId,
         createGame,
         playMove,
+        claimTimeout,
         getGame,
         loadGame,
         clearGame,

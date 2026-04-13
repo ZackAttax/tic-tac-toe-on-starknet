@@ -17,6 +17,8 @@ pub trait ITicTacToe<TContractState> {
         config: Array<felt252>,
     ) -> u64;
     fn play_move(ref self: TContractState, game_id: u64, board_index: u8, cell_index: u8);
+    /// Finalize when the current turn deadline has passed; anyone may call.
+    fn claim_timeout(ref self: TContractState, game_id: u64);
     fn get_game(self: @TContractState, game_id: u64) -> tictactoe::Game;
     /// Exposes derived meta for clients/tests; must stay consistent with `get_game` boards.
     fn get_game_meta(self: @TContractState, game_id: u64) -> tictactoe::GameMeta;
@@ -29,12 +31,13 @@ pub trait ITicTacToe<TContractState> {
 #[starknet::contract]
 pub mod tictactoe {
     use core::array::ArrayTrait;
+    use core::option::OptionTrait;
     use core::traits::TryInto;
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePathEntry,
         StoragePointerReadAccess, StoragePointerWriteAccess,
     };
-    use starknet::{ContractAddress, get_caller_address};
+    use starknet::{ContractAddress, get_block_timestamp, get_caller_address};
 
     #[derive(Copy, Drop, Serde, starknet::Store)]
     pub struct LocalBoard {
@@ -72,6 +75,10 @@ pub mod tictactoe {
         pub completed_locals: u8,
         /// Escrow wager id when created via `create_game_for`; 0 for `create_game`.
         pub wager_id: u64,
+        /// Seconds per turn for this game (fixed at creation).
+        pub move_timeout_secs: u64,
+        /// Inclusive deadline for the current player (`play_move` allowed while `now <= turn_deadline`).
+        pub turn_deadline: u64,
     }
 
     #[derive(Copy, Drop, Serde, starknet::Store)]
@@ -82,6 +89,8 @@ pub mod tictactoe {
         pub next_board: u8,
         pub turn: u8,
         pub status: u8,
+        pub move_timeout_secs: u64,
+        pub turn_deadline: u64,
     }
 
     #[storage]
@@ -92,6 +101,8 @@ pub mod tictactoe {
         game_meta: Map<u64, GameMeta>,
         /// Per-game local boards: avoids rewriting all 9 boards on every move.
         boards: Map<u64, Map<u8, LocalBoard>>,
+        /// Default per-turn duration for `create_game` and `create_game_for` when config is empty.
+        default_move_timeout_secs: u64,
     }
 
     #[derive(Drop, Serde, starknet::Event)]
@@ -109,6 +120,7 @@ pub mod tictactoe {
         MovePlayed: MovePlayed,
         GameWon: GameWon,
         GameDraw: GameDraw,
+        TimeoutClaimed: TimeoutClaimed,
     }
 
     #[derive(Drop, Serde, starknet::Event)]
@@ -135,9 +147,24 @@ pub mod tictactoe {
         pub game_id: u64,
     }
 
+    #[derive(Drop, Serde, starknet::Event)]
+    pub struct TimeoutClaimed {
+        pub game_id: u64,
+        pub winner: ContractAddress,
+        pub loser: ContractAddress,
+        pub status: u8,
+        pub turn_deadline: u64,
+    }
+
     #[constructor]
-    fn constructor(ref self: ContractState, game_creator: ContractAddress) {
+    fn constructor(
+        ref self: ContractState, game_creator: ContractAddress, default_move_timeout_secs: u64,
+    ) {
+        let zero: ContractAddress = 0.try_into().unwrap();
+        assert(game_creator != zero, 'zero_creator');
+        assert(default_move_timeout_secs > 0_u64, 'bad_timeout');
         self.game_creator.write(game_creator);
+        self.default_move_timeout_secs.write(default_move_timeout_secs);
     }
 
     fn empty_local() -> LocalBoard {
@@ -179,7 +206,46 @@ pub mod tictactoe {
             next_board: *meta.next_board,
             turn: *meta.turn,
             status: *meta.status,
+            move_timeout_secs: *meta.move_timeout_secs,
+            turn_deadline: *meta.turn_deadline,
         }
+    }
+
+    /// Fresh game meta: X opens; deadline starts now for the first move.
+    fn new_game_meta(
+        player_x: ContractAddress,
+        player_o: ContractAddress,
+        wager_id: u64,
+        move_timeout_secs: u64,
+    ) -> GameMeta {
+        let now = get_block_timestamp();
+        GameMeta {
+            player_x,
+            player_o,
+            next_board: 9_u8,
+            turn: 0_u8,
+            status: 0_u8,
+            meta_x_bits: 0_u16,
+            meta_o_bits: 0_u16,
+            completed_locals: 0_u8,
+            wager_id,
+            move_timeout_secs,
+            turn_deadline: now + move_timeout_secs,
+        }
+    }
+
+    fn parse_move_timeout_config(
+        self: @ContractState, config: @Array<felt252>,
+    ) -> u64 {
+        let span = config.span();
+        if span.is_empty() {
+            return self.default_move_timeout_secs.read();
+        }
+        assert(span.len() == 1, 'bad_config');
+        let felt: felt252 = *span.at(0);
+        let parsed: u64 = felt.try_into().expect('bad_cfg_val');
+        assert(parsed > 0_u64, 'bad_timeout');
+        parsed
     }
 
     fn require_known_game(self: @ContractState, game_id: u64) {
@@ -197,17 +263,8 @@ pub mod tictactoe {
             let game_id = self.next_game_id.read();
             self.next_game_id.write(game_id + 1_u64);
 
-            let meta = GameMeta {
-                player_x: caller,
-                player_o: opponent,
-                next_board: 9_u8,
-                turn: 0_u8,
-                status: 0_u8,
-                meta_x_bits: 0_u16,
-                meta_o_bits: 0_u16,
-                completed_locals: 0_u8,
-                wager_id: 0_u64,
-            };
+            let move_timeout_secs = self.default_move_timeout_secs.read();
+            let meta = new_game_meta(caller, opponent, 0_u64, move_timeout_secs);
 
             self.game_meta.write(game_id, meta);
 
@@ -236,22 +293,12 @@ pub mod tictactoe {
             assert(player_o != zero, 'zero_po');
             assert(player_x != player_o, 'same_player');
             assert(wager_id != 0_u64, 'bad_wager');
-            assert(config.is_empty(), 'bad_config');
 
             let game_id = self.next_game_id.read();
             self.next_game_id.write(game_id + 1_u64);
 
-            let meta = GameMeta {
-                player_x,
-                player_o,
-                next_board: 9_u8,
-                turn: 0_u8,
-                status: 0_u8,
-                meta_x_bits: 0_u16,
-                meta_o_bits: 0_u16,
-                completed_locals: 0_u8,
-                wager_id,
-            };
+            let move_timeout_secs = parse_move_timeout_config(@self, @config);
+            let meta = new_game_meta(player_x, player_o, wager_id, move_timeout_secs);
 
             self.game_meta.write(game_id, meta);
 
@@ -269,6 +316,7 @@ pub mod tictactoe {
 
             let mut meta = self.game_meta.read(game_id);
             assert(meta.status == 0_u8, 'game_over');
+            assert(get_block_timestamp() <= meta.turn_deadline, 'turn_expired');
 
             let caller = get_caller_address();
             if meta.turn == 0_u8 {
@@ -346,6 +394,8 @@ pub mod tictactoe {
                 meta.next_board = 9_u8;
             }
             meta.turn = meta.turn ^ 1_u8;
+            let now = get_block_timestamp();
+            meta.turn_deadline = now + meta.move_timeout_secs;
 
             let local_board_status = local.status;
             self.game_meta.write(game_id, meta);
@@ -365,6 +415,54 @@ pub mod tictactoe {
                         },
                     ),
                 );
+        }
+
+        fn claim_timeout(ref self: ContractState, game_id: u64) {
+            let next_id = self.next_game_id.read();
+            assert(game_id < next_id, 'unknown_game');
+            let mut meta = self.game_meta.read(game_id);
+            assert(meta.status == 0_u8, 'game_over');
+            assert(get_block_timestamp() > meta.turn_deadline, 'not_expired');
+
+            if meta.turn == 0_u8 {
+                meta.status = 2_u8;
+                let winner = meta.player_o;
+                let loser = meta.player_x;
+                let deadline = meta.turn_deadline;
+                self.game_meta.write(game_id, meta);
+                self
+                    .emit(
+                        Event::TimeoutClaimed(
+                            TimeoutClaimed {
+                                game_id,
+                                winner,
+                                loser,
+                                status: 2_u8,
+                                turn_deadline: deadline,
+                            },
+                        ),
+                    );
+                self.emit(Event::GameWon(GameWon { game_id, winner, status: 2_u8 }));
+            } else {
+                meta.status = 1_u8;
+                let winner = meta.player_x;
+                let loser = meta.player_o;
+                let deadline = meta.turn_deadline;
+                self.game_meta.write(game_id, meta);
+                self
+                    .emit(
+                        Event::TimeoutClaimed(
+                            TimeoutClaimed {
+                                game_id,
+                                winner,
+                                loser,
+                                status: 1_u8,
+                                turn_deadline: deadline,
+                            },
+                        ),
+                    );
+                self.emit(Event::GameWon(GameWon { game_id, winner, status: 1_u8 }));
+            }
         }
 
         fn get_game(self: @ContractState, game_id: u64) -> Game {

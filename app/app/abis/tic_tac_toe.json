@@ -91,6 +91,14 @@
       {
         "name": "status",
         "type": "core::integer::u8"
+      },
+      {
+        "name": "move_timeout_secs",
+        "type": "core::integer::u64"
+      },
+      {
+        "name": "turn_deadline",
+        "type": "core::integer::u64"
       }
     ]
   },
@@ -132,6 +140,14 @@
       },
       {
         "name": "wager_id",
+        "type": "core::integer::u64"
+      },
+      {
+        "name": "move_timeout_secs",
+        "type": "core::integer::u64"
+      },
+      {
+        "name": "turn_deadline",
         "type": "core::integer::u64"
       }
     ]
@@ -213,6 +229,18 @@
           {
             "name": "cell_index",
             "type": "core::integer::u8"
+          }
+        ],
+        "outputs": [],
+        "state_mutability": "external"
+      },
+      {
+        "type": "function",
+        "name": "claim_timeout",
+        "inputs": [
+          {
+            "name": "game_id",
+            "type": "core::integer::u64"
           }
         ],
         "outputs": [],
@@ -323,6 +351,10 @@
       {
         "name": "game_creator",
         "type": "core::starknet::contract_address::ContractAddress"
+      },
+      {
+        "name": "default_move_timeout_secs",
+        "type": "core::integer::u64"
       }
     ]
   },
@@ -436,6 +468,38 @@
   },
   {
     "type": "event",
+    "name": "tic_tac_toe::tic_tac_toe::tictactoe::TimeoutClaimed",
+    "kind": "struct",
+    "members": [
+      {
+        "name": "game_id",
+        "type": "core::integer::u64",
+        "kind": "data"
+      },
+      {
+        "name": "winner",
+        "type": "core::starknet::contract_address::ContractAddress",
+        "kind": "data"
+      },
+      {
+        "name": "loser",
+        "type": "core::starknet::contract_address::ContractAddress",
+        "kind": "data"
+      },
+      {
+        "name": "status",
+        "type": "core::integer::u8",
+        "kind": "data"
+      },
+      {
+        "name": "turn_deadline",
+        "type": "core::integer::u64",
+        "kind": "data"
+      }
+    ]
+  },
+  {
+    "type": "event",
     "name": "tic_tac_toe::tic_tac_toe::tictactoe::Event",
     "kind": "enum",
     "variants": [
@@ -457,6 +521,11 @@
       {
         "name": "GameDraw",
         "type": "tic_tac_toe::tic_tac_toe::tictactoe::GameDraw",
+        "kind": "nested"
+      },
+      {
+        "name": "TimeoutClaimed",
+        "type": "tic_tac_toe::tic_tac_toe::tictactoe::TimeoutClaimed",
         "kind": "nested"
       }
     ]
