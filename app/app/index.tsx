@@ -61,7 +61,7 @@ export default function PlayScreen() {
   const [opponentAddress, setOpponentAddress] = useState("");
   const [game, setGame] = useState<Game | null>(null);
   const [gameStarted, setGameStarted] = useState(false);
-  const [creatingGame, setCreatingGame] = useState(false);
+  const [isEnteringGame, setIsEnteringGame] = useState(false);
   const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
   const [selectedMove, setSelectedMove] = useState<SelectedMove | null>(null);
   const [isConfirmingSelection, setIsConfirmingSelection] = useState(false);
@@ -78,6 +78,11 @@ export default function PlayScreen() {
   } = useTicTacToe();
   const currentGameIdRef = useRef<GameId | null>(currentGameId);
   currentGameIdRef.current = currentGameId;
+
+  /** Monotonic token so stale async entry continuations do not commit after a newer entry starts. */
+  const entryRequestIdRef = useRef(0);
+  const isStaleEntryRequest = (requestId: number) =>
+    requestId !== entryRequestIdRef.current;
   const invitations: { id: GameId; from: string }[] = [];
   const [joinGameId, setJoinGameId] = useState("");
 
@@ -124,6 +129,7 @@ export default function PlayScreen() {
 
   const commitGameSnapshot = useCallback(
     (gameId: GameId, next: Game) => {
+      setSyncStale(false);
       setGame(next);
 
       const me = myAddress;
@@ -169,7 +175,6 @@ export default function PlayScreen() {
         return next;
       }
 
-      setSyncStale(false);
       commitGameSnapshot(gameId, next);
       return next;
     },
@@ -269,57 +274,109 @@ export default function PlayScreen() {
   }, [currentGameId, syncGame]);
 
   async function handleStartGame() {
-    if (!opponentAddress.trim() || creatingGame) return;
-    setCreatingGame(true);
+    if (!opponentAddress.trim() || isEnteringGame) return;
+    entryRequestIdRef.current += 1;
+    const requestId = entryRequestIdRef.current;
+    setIsEnteringGame(true);
     try {
       const gameId = await createGame(opponentAddress);
+      if (isStaleEntryRequest(requestId)) return;
       if (gameId != null) {
-        const next = await fetchGame(gameId);
-        if (!next) {
-          if (__DEV__) {
-            console.log("Could not fetch game state after create");
-          }
-          return;
-        }
+        if (isStaleEntryRequest(requestId)) return;
         loadGame(gameId);
         setPendingMove(null);
         setSelectedMove(null);
         setIsConfirmingSelection(false);
-        setSyncStale(false);
-        commitGameSnapshot(gameId, next);
         setGameStarted(true);
+        setGame(null);
+        setMyRole(null);
+
+        const next = await fetchGame(gameId);
+        if (isStaleEntryRequest(requestId)) return;
+        if (next) {
+          if (isStaleEntryRequest(requestId)) return;
+          commitGameSnapshot(gameId, next);
+        } else if (__DEV__) {
+          console.log(
+            "First read after create failed; showing loading until poll succeeds"
+          );
+        }
       } else {
         if (__DEV__) console.log("createGame returned null (no tx hash)");
       }
     } finally {
-      setCreatingGame(false);
+      if (requestId === entryRequestIdRef.current) {
+        setIsEnteringGame(false);
+      }
     }
   }
 
   async function handleJoinGame() {
     const id = joinGameId.trim();
-    if (!/^[0-9]+$/.test(id)) return;
+    if (!/^[0-9]+$/.test(id) || isEnteringGame) return;
 
-    let next: Game | null = null;
+    entryRequestIdRef.current += 1;
+    const requestId = entryRequestIdRef.current;
+    setIsEnteringGame(true);
     try {
-      next = await fetchGame(id);
-    } catch (error) {
-      if (__DEV__) {
-        console.warn("Failed to load joined game", error);
+      let next: Game | null = null;
+      try {
+        next = await fetchGame(id);
+      } catch (error) {
+        if (__DEV__) {
+          console.warn("Failed to load joined game", error);
+        }
+        return;
       }
-      return;
-    }
-    if (!next) {
-      return;
-    }
+      if (isStaleEntryRequest(requestId)) return;
+      if (!next) {
+        return;
+      }
 
-    loadGame(id);
-    commitGameSnapshot(id, next);
-    setPendingMove(null);
-    setSelectedMove(null);
-    setIsConfirmingSelection(false);
-    setGameStarted(true);
-    setJoinGameId("");
+      if (isStaleEntryRequest(requestId)) return;
+      loadGame(id);
+      commitGameSnapshot(id, next);
+      setPendingMove(null);
+      setSelectedMove(null);
+      setIsConfirmingSelection(false);
+      setGameStarted(true);
+      setJoinGameId("");
+    } finally {
+      if (requestId === entryRequestIdRef.current) {
+        setIsEnteringGame(false);
+      }
+    }
+  }
+
+  async function handleAcceptInvitation(inviteGameId: GameId) {
+    if (isEnteringGame) return;
+    entryRequestIdRef.current += 1;
+    const requestId = entryRequestIdRef.current;
+    setIsEnteringGame(true);
+    try {
+      let next: Game | null = null;
+      try {
+        next = await fetchGame(inviteGameId);
+      } catch {
+        return;
+      }
+      if (isStaleEntryRequest(requestId)) return;
+      if (!next) {
+        return;
+      }
+
+      if (isStaleEntryRequest(requestId)) return;
+      loadGame(inviteGameId);
+      commitGameSnapshot(inviteGameId, next);
+      setPendingMove(null);
+      setSelectedMove(null);
+      setIsConfirmingSelection(false);
+      setGameStarted(true);
+    } finally {
+      if (requestId === entryRequestIdRef.current) {
+        setIsEnteringGame(false);
+      }
+    }
   }
 
   function handleCellPress(boardIndex: number, cellIndex: number) {
@@ -419,6 +476,8 @@ export default function PlayScreen() {
   }
 
   function handleNewGame() {
+    entryRequestIdRef.current += 1;
+    setIsEnteringGame(false);
     clearGame();
     setOpponentAddress("");
     setGameStarted(false);
@@ -431,7 +490,7 @@ export default function PlayScreen() {
   }
 
   const statusText = useMemo(() => {
-    if (creatingGame) return "Waiting for game to be created…";
+    if (isEnteringGame) return "Entering game…";
     if (activePendingMove?.isPending)
       return "Waiting for move confirmation…";
     if (syncStale && currentGameId != null)
@@ -457,7 +516,7 @@ export default function PlayScreen() {
     }
     return `Opponent's turn${oppForced}`;
   }, [
-    creatingGame,
+    isEnteringGame,
     activePendingMove?.isPending,
     syncStale,
     currentGameId,
@@ -593,13 +652,13 @@ export default function PlayScreen() {
           <Pressable
             accessibilityRole="button"
             onPress={handleStartGame}
-            disabled={!opponentAddress.trim() || creatingGame}
+            disabled={!opponentAddress.trim() || isEnteringGame}
             style={({ pressed }) => [
               styles.startButton,
               {
                 backgroundColor: tint,
                 opacity:
-                  !opponentAddress.trim() || creatingGame
+                  !opponentAddress.trim() || isEnteringGame
                     ? 0.5
                     : pressed
                       ? 0.8
@@ -607,7 +666,7 @@ export default function PlayScreen() {
               },
             ]}
           >
-            {creatingGame ? (
+            {isEnteringGame ? (
               <ActivityIndicator color="#fff" />
             ) : (
               <Text style={styles.startButtonText}>
@@ -644,16 +703,19 @@ export default function PlayScreen() {
           <Pressable
             accessibilityRole="button"
             onPress={handleJoinGame}
-            disabled={!/^[0-9]+$/.test(joinGameId.trim())}
+            disabled={
+              !/^[0-9]+$/.test(joinGameId.trim()) || isEnteringGame
+            }
             style={({ pressed }) => [
               styles.startButton,
               {
                 backgroundColor: tint,
-                opacity: !/^[0-9]+$/.test(joinGameId.trim())
-                  ? 0.5
-                  : pressed
-                    ? 0.8
-                    : 1,
+                opacity:
+                  !/^[0-9]+$/.test(joinGameId.trim()) || isEnteringGame
+                    ? 0.5
+                    : pressed
+                      ? 0.8
+                      : 1,
               },
             ]}
           >
@@ -674,15 +736,13 @@ export default function PlayScreen() {
                 </View>
                 <Pressable
                   accessibilityRole="button"
-                  onPress={() => {
-                    loadGame(inv.id);
-                    setSelectedMove(null);
-                    setIsConfirmingSelection(false);
-                    setGameStarted(true);
-                  }}
+                  disabled={isEnteringGame}
+                  onPress={() => void handleAcceptInvitation(inv.id)}
                   style={({ pressed }) => [
                     styles.acceptButton,
-                    { opacity: pressed ? 0.8 : 1 },
+                    {
+                      opacity: isEnteringGame ? 0.5 : pressed ? 0.8 : 1,
+                    },
                   ]}
                 >
                   <Text style={styles.acceptText}>Accept</Text>
