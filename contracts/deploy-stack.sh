@@ -10,15 +10,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR/.."
+
+# Always load repo `.env` when present so stack-only settings (`DEPLOY_MOCK_TOKEN`,
+# `WAGER_ESCROW_*`, owners, class-hash skips, etc.) apply even when `STARKNET_*` is already
+# exported in the shell (conditional loading would skip the file and drop those values).
+if [ -f "$PROJECT_ROOT/.env" ]; then
+  # shellcheck disable=SC1090
+  source "$PROJECT_ROOT/.env"
+fi
+
 # shellcheck source=deploy-lib.sh
 source "$SCRIPT_DIR/deploy-lib.sh"
-
-if [ -z "${STARKNET_KEYSTORE:-}" ] || [ -z "${STARKNET_ACCOUNT:-}" ] || { [ -z "${STARKNET_RPC:-}" ] && [ -z "${STARKNET_RPC_URL:-}" ]; }; then
-  if [ -f "$PROJECT_ROOT/.env" ]; then
-    # shellcheck disable=SC1090
-    source "$PROJECT_ROOT/.env"
-  fi
-fi
 
 display_help() {
   echo "Usage: $0 [option...]"

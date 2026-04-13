@@ -74,7 +74,7 @@ Copy [`contracts/.env.example`](contracts/.env.example) to the **repo root** `.e
 
 ### Reference (mock) stack — `deploy-stack.sh`
 
-Deploys `mock_erc20` (optional), `mock_game_adapter`, UTTT (`tictactoe`), and `wager_escrow` in order. Prints suggested `EXPO_PUBLIC_*` lines at the end.
+Deploys `mock_erc20` (optional), `mock_game_adapter`, UTTT (`tictactoe`), and `wager_escrow` in order. Prints suggested `EXPO_PUBLIC_*` lines at the end. If a **repo root** `.env` exists, the script always sources it first (so stack-only variables are read even when Starkli credentials are already in your shell). **Precedence:** values in `.env` override same-named exports from your shell; see [`contracts/DEPLOY.md`](contracts/DEPLOY.md) for details.
 
 ```bash
 ./contracts/deploy-stack.sh

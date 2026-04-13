@@ -11,30 +11,6 @@ source "$SCRIPT_DIR/deploy-lib.sh"
 POLL_INTERVAL_SECONDS=${TICTACTOE_POLL_INTERVAL_SECONDS:-5}
 MAX_CLASS_WAIT_ATTEMPTS=${TICTACTOE_MAX_CLASS_WAIT_ATTEMPTS:-24}
 
-# Load repo `.env` when any deploy-related var is still unset (including constructor calldata).
-# Also load when `TICTACTOE_DEFAULT_MOVE_TIMEOUT_SECS` is unset so a value defined only in `.env`
-# is applied before the 86400 fallback (deployer may have STARKNET_* / creator only in the shell).
-if [ -z "$STARKNET_KEYSTORE" ] || [ -z "$STARKNET_ACCOUNT" ] || [ -z "$STARKNET_NETWORK" ] || { [ -z "$STARKNET_RPC" ] && [ -z "$STARKNET_RPC_URL" ]; } || [ -z "${TICTACTOE_GAME_CREATOR:-}" ] || [ -z "${TICTACTOE_DEFAULT_MOVE_TIMEOUT_SECS+x}" ]; then
-  if [ -f "$PROJECT_ROOT/.env" ]; then
-    # shellcheck disable=SC1090
-    source "$PROJECT_ROOT/.env"
-  fi
-fi
-
-# Check if required env variables are set, if not exit
-if [ -z "$STARKNET_KEYSTORE" ]; then
-  echo "Error: STARKNET_KEYSTORE is not set."
-  exit 1
-elif [ -z "$STARKNET_ACCOUNT" ]; then
-  echo "Error: STARKNET_ACCOUNT is not set."
-  exit 1
-elif [ -z "${TICTACTOE_GAME_CREATOR:-}" ]; then
-  echo "Error: TICTACTOE_GAME_CREATOR is not set (authorized adapter or escrow address for constructor)."
-  exit 1
-fi
-
-deploy_lib_setup_provider_args
-
 display_help() {
   echo "Usage: $0 [option...]"
   echo
@@ -71,7 +47,7 @@ for arg in "$@"; do
 done
 
 # Check if unknown options are passed, if so exit
-if [ ! -z "${unrecognized_options[@]}" ]; then
+if [ "${#unrecognized_options[@]}" -ne 0 ]; then
   echo "Error: invalid option(s) passed ${unrecognized_options[*]}" 1>&2
   exit 1
 fi
@@ -95,6 +71,30 @@ while getopts ":h" opt; do
       ;;
   esac
 done
+
+# Load repo `.env` when any deploy-related var is still unset (including constructor calldata).
+# Also load when `TICTACTOE_DEFAULT_MOVE_TIMEOUT_SECS` is unset so a value defined only in `.env`
+# is applied before the 86400 fallback (deployer may have STARKNET_* / creator only in the shell).
+if [ -z "$STARKNET_KEYSTORE" ] || [ -z "$STARKNET_ACCOUNT" ] || [ -z "$STARKNET_NETWORK" ] || { [ -z "$STARKNET_RPC" ] && [ -z "$STARKNET_RPC_URL" ]; } || [ -z "${TICTACTOE_GAME_CREATOR:-}" ] || [ -z "${TICTACTOE_DEFAULT_MOVE_TIMEOUT_SECS+x}" ]; then
+  if [ -f "$PROJECT_ROOT/.env" ]; then
+    # shellcheck disable=SC1090
+    source "$PROJECT_ROOT/.env"
+  fi
+fi
+
+# Check if required env variables are set, if not exit
+if [ -z "$STARKNET_KEYSTORE" ]; then
+  echo "Error: STARKNET_KEYSTORE is not set."
+  exit 1
+elif [ -z "$STARKNET_ACCOUNT" ]; then
+  echo "Error: STARKNET_ACCOUNT is not set."
+  exit 1
+elif [ -z "${TICTACTOE_GAME_CREATOR:-}" ]; then
+  echo "Error: TICTACTOE_GAME_CREATOR is not set (authorized adapter or escrow address for constructor)."
+  exit 1
+fi
+
+deploy_lib_setup_provider_args
 
 CONTRACTS_DIR=$PROJECT_ROOT/contracts
 # Sierra artifact produced by scarb for the tictactoe contract module

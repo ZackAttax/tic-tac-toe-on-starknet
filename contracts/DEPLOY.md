@@ -19,7 +19,7 @@ This package builds **one** Scarb Starknet target; all contracts share [`Scarb.t
 
 It prints suggested `EXPO_PUBLIC_*` values at the end.
 
-Configure Starkli via `STARKNET_KEYSTORE`, `STARKNET_ACCOUNT`, and `STARKNET_RPC` or `STARKNET_RPC_URL` (or `STARKNET_NETWORK`). You can place these in a **repo root** `.env` file; the script loads it when variables are unset.
+Configure Starkli via `STARKNET_KEYSTORE`, `STARKNET_ACCOUNT`, and `STARKNET_RPC` or `STARKNET_RPC_URL` (or `STARKNET_NETWORK`). Put deploy settings in a **repo root** `.env` file: `deploy-stack.sh` **always** sources that file when it exists (so stack-only vars are loaded even if Starknet credentials are already exported in your shell). **Precedence:** names set in `.env` override same-named variables already exported in your shell (normal `source` semantics). A prefix like `STARKNET_RPC=… ./contracts/deploy-stack.sh` does **not** win over a `STARKNET_RPC=` line in `.env`; for a one-off override, edit or temporarily rename `.env`, or remove that assignment from the file for that run. `deploy-sepolia.sh` uses conditional loading—see its header.
 
 See [`contracts/.env.example`](.env.example) for all variables.
 
