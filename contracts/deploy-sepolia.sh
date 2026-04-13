@@ -6,6 +6,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 PROJECT_ROOT=$SCRIPT_DIR/..
+# shellcheck source=deploy-lib.sh
+source "$SCRIPT_DIR/deploy-lib.sh"
 POLL_INTERVAL_SECONDS=${TICTACTOE_POLL_INTERVAL_SECONDS:-5}
 MAX_CLASS_WAIT_ATTEMPTS=${TICTACTOE_MAX_CLASS_WAIT_ATTEMPTS:-24}
 
@@ -31,17 +33,7 @@ elif [ -z "${TICTACTOE_GAME_CREATOR:-}" ]; then
   exit 1
 fi
 
-# Default network to sepolia if not provided
-STARKNET_NETWORK=${STARKNET_NETWORK:-sepolia}
-
-# Prefer explicit RPC over network alias if provided
-if [ -n "$STARKNET_RPC" ]; then
-  PROVIDER_ARGS=(--rpc "$STARKNET_RPC")
-elif [ -n "$STARKNET_RPC_URL" ]; then
-  PROVIDER_ARGS=(--rpc "$STARKNET_RPC_URL")
-else
-  PROVIDER_ARGS=(--network "$STARKNET_NETWORK")
-fi
+deploy_lib_setup_provider_args
 
 display_help() {
   echo "Usage: $0 [option...]"
@@ -60,35 +52,11 @@ display_help() {
   echo "   TICTACTOE_POLL_INTERVAL_SECONDS Optional: seconds between declare visibility checks (default: 5)"
   echo "   TICTACTOE_MAX_CLASS_WAIT_ATTEMPTS Optional: number of declare visibility checks before failing (default: 24)"
   echo
-  echo "   Use a JSON-RPC v0.8 endpoint URL with starkli 0.4.x (e.g. Alchemy .../rpc/v0_8/...); v0_9 may return Invalid block id."
+  echo "   For the full mock stack (escrow + adapter + optional mock token), use ./contracts/deploy-stack.sh (see contracts/DEPLOY.md)."
+  echo
+  echo "   Use a JSON-RPC endpoint compatible with your starkli build (see .tool-versions); Alchemy v0_10 or v0_9 URLs work with starkli 0.4.x."
   echo
   echo "Example: $0"
-}
-
-extract_declared_class_hash() {
-  local output="$1"
-
-  printf '%s\n' "$output" | awk '
-    /^Class hash declared:$/ { getline; print $1; exit }
-    /^Declaring Cairo 1 class:/ { print $NF; exit }
-  '
-}
-
-wait_for_declared_class() {
-  local class_hash="$1"
-  local attempt=1
-
-  while [ "$attempt" -le "$MAX_CLASS_WAIT_ATTEMPTS" ]; do
-    if starkli class-by-hash "${PROVIDER_ARGS[@]}" "$class_hash" >/dev/null 2>&1; then
-      return 0
-    fi
-
-    echo "Waiting for declared class to become visible on RPC ($attempt/$MAX_CLASS_WAIT_ATTEMPTS)..."
-    sleep "$POLL_INTERVAL_SECONDS"
-    attempt=$((attempt + 1))
-  done
-
-  return 1
 }
 
 # Transform long options to short ones
@@ -161,17 +129,15 @@ if [ -z "$TICTACTOE_CLASS_HASH" ]; then
   fi
 
   echo "$TICTACTOE_DECLARE_OUTPUT"
-  TICTACTOE_CONTRACT_CLASS_HASH=$(extract_declared_class_hash "$TICTACTOE_DECLARE_OUTPUT")
-  if [ -n "$TICTACTOE_CONTRACT_CLASS_HASH" ]; then
-    TICTACTOE_CONTRACT_CLASS_HASH=$(echo "$TICTACTOE_CONTRACT_CLASS_HASH" | tr -d '\r\n\t ' | tr '[:upper:]' '[:lower:]')
-  fi
+  TICTACTOE_CONTRACT_CLASS_HASH=$(deploy_lib_extract_declared_class_hash "$TICTACTOE_DECLARE_OUTPUT")
+  TICTACTOE_CONTRACT_CLASS_HASH=$(deploy_lib_normalize_class_hash "$TICTACTOE_CONTRACT_CLASS_HASH")
   if ! echo "$TICTACTOE_CONTRACT_CLASS_HASH" | grep -Eq '^0x[0-9a-f]+$'; then
     echo "Error: could not parse a valid class hash from declare output."
     exit 1
   fi
   echo "Contract class hash: $TICTACTOE_CONTRACT_CLASS_HASH"
 
-  if ! wait_for_declared_class "$TICTACTOE_CONTRACT_CLASS_HASH"; then
+  if ! deploy_lib_wait_for_declared_class "$TICTACTOE_CONTRACT_CLASS_HASH" "$POLL_INTERVAL_SECONDS" "$MAX_CLASS_WAIT_ATTEMPTS"; then
     echo "Error: class $TICTACTOE_CONTRACT_CLASS_HASH was declared but never became visible through the configured RPC."
     exit 1
   fi

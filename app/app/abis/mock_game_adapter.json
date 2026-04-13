@@ -1,0 +1,244 @@
+[
+  {
+    "type": "impl",
+    "name": "AdapterImpl",
+    "interface_name": "tic_tac_toe::protocol::IGameAdapter"
+  },
+  {
+    "type": "struct",
+    "name": "core::integer::u256",
+    "members": [
+      {
+        "name": "low",
+        "type": "core::integer::u128"
+      },
+      {
+        "name": "high",
+        "type": "core::integer::u128"
+      }
+    ]
+  },
+  {
+    "type": "struct",
+    "name": "tic_tac_toe::protocol::WagerDeadlines",
+    "members": [
+      {
+        "name": "accept_by",
+        "type": "core::integer::u64"
+      },
+      {
+        "name": "resolve_by",
+        "type": "core::integer::u64"
+      }
+    ]
+  },
+  {
+    "type": "struct",
+    "name": "tic_tac_toe::protocol::WagerConfig",
+    "members": [
+      {
+        "name": "game_adapter",
+        "type": "core::starknet::contract_address::ContractAddress"
+      },
+      {
+        "name": "token",
+        "type": "core::starknet::contract_address::ContractAddress"
+      },
+      {
+        "name": "stake",
+        "type": "core::integer::u256"
+      },
+      {
+        "name": "deadlines",
+        "type": "tic_tac_toe::protocol::WagerDeadlines"
+      },
+      {
+        "name": "designated_opponent",
+        "type": "core::starknet::contract_address::ContractAddress"
+      },
+      {
+        "name": "game_params",
+        "type": "core::array::Array::<core::felt252>"
+      }
+    ]
+  },
+  {
+    "type": "enum",
+    "name": "core::bool",
+    "variants": [
+      {
+        "name": "False",
+        "type": "()"
+      },
+      {
+        "name": "True",
+        "type": "()"
+      }
+    ]
+  },
+  {
+    "type": "struct",
+    "name": "tic_tac_toe::protocol::MatchRef",
+    "members": [
+      {
+        "name": "adapter",
+        "type": "core::starknet::contract_address::ContractAddress"
+      },
+      {
+        "name": "match_id",
+        "type": "core::integer::u64"
+      }
+    ]
+  },
+  {
+    "type": "enum",
+    "name": "tic_tac_toe::protocol::MatchOutcome",
+    "variants": [
+      {
+        "name": "None",
+        "type": "()"
+      },
+      {
+        "name": "CreatorWin",
+        "type": "()"
+      },
+      {
+        "name": "OpponentWin",
+        "type": "()"
+      },
+      {
+        "name": "Draw",
+        "type": "()"
+      },
+      {
+        "name": "Cancelled",
+        "type": "()"
+      },
+      {
+        "name": "Expired",
+        "type": "()"
+      }
+    ]
+  },
+  {
+    "type": "interface",
+    "name": "tic_tac_toe::protocol::IGameAdapter",
+    "items": [
+      {
+        "type": "function",
+        "name": "validate_config",
+        "inputs": [
+          {
+            "name": "config",
+            "type": "tic_tac_toe::protocol::WagerConfig"
+          }
+        ],
+        "outputs": [
+          {
+            "type": "core::bool"
+          }
+        ],
+        "state_mutability": "view"
+      },
+      {
+        "type": "function",
+        "name": "create_match",
+        "inputs": [
+          {
+            "name": "creator",
+            "type": "core::starknet::contract_address::ContractAddress"
+          },
+          {
+            "name": "opponent",
+            "type": "core::starknet::contract_address::ContractAddress"
+          },
+          {
+            "name": "config",
+            "type": "tic_tac_toe::protocol::WagerConfig"
+          }
+        ],
+        "outputs": [
+          {
+            "type": "tic_tac_toe::protocol::MatchRef"
+          }
+        ],
+        "state_mutability": "external"
+      },
+      {
+        "type": "function",
+        "name": "normalized_participants",
+        "inputs": [
+          {
+            "name": "match_ref",
+            "type": "tic_tac_toe::protocol::MatchRef"
+          }
+        ],
+        "outputs": [
+          {
+            "type": "(core::starknet::contract_address::ContractAddress, core::starknet::contract_address::ContractAddress)"
+          }
+        ],
+        "state_mutability": "view"
+      },
+      {
+        "type": "function",
+        "name": "normalized_outcome",
+        "inputs": [
+          {
+            "name": "match_ref",
+            "type": "tic_tac_toe::protocol::MatchRef"
+          }
+        ],
+        "outputs": [
+          {
+            "type": "tic_tac_toe::protocol::MatchOutcome"
+          }
+        ],
+        "state_mutability": "view"
+      }
+    ]
+  },
+  {
+    "type": "impl",
+    "name": "HooksImpl",
+    "interface_name": "tic_tac_toe::mock_game_adapter::IMockAdapterHooks"
+  },
+  {
+    "type": "interface",
+    "name": "tic_tac_toe::mock_game_adapter::IMockAdapterHooks",
+    "items": [
+      {
+        "type": "function",
+        "name": "test_set_outcome",
+        "inputs": [
+          {
+            "name": "match_id",
+            "type": "core::integer::u64"
+          },
+          {
+            "name": "outcome",
+            "type": "tic_tac_toe::protocol::MatchOutcome"
+          }
+        ],
+        "outputs": [],
+        "state_mutability": "external"
+      }
+    ]
+  },
+  {
+    "type": "constructor",
+    "name": "constructor",
+    "inputs": [
+      {
+        "name": "owner",
+        "type": "core::starknet::contract_address::ContractAddress"
+      }
+    ]
+  },
+  {
+    "type": "event",
+    "name": "tic_tac_toe::mock_game_adapter::mock_game_adapter::Event",
+    "kind": "enum",
+    "variants": []
+  }
+]

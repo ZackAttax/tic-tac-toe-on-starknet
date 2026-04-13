@@ -17,6 +17,13 @@ import {
   useTicTacToe,
 } from "@/app/context/TicTacToeContractConnector";
 import { useStarknetConnector } from "@/app/context/StarknetConnector";
+import {
+  type GetWagerOutcome,
+  useWagerEscrow,
+} from "@/app/context/WagerEscrowContractConnector";
+import { getAcceptEligibility, canResolveWagerUi } from "@/utils/acceptEligibility";
+import { humanStakeToRawAmount } from "@/utils/wagerAmount";
+import { WAGER_TOKEN_DECIMALS } from "@/utils/wagerStackConfig";
 import AccountGate from "@/components/AccountGate";
 import { normalizeAddress } from "@/utils/address";
 import type { Game, LocalBoard, MyRole } from "@/utils/ultimateTicTacToe";
@@ -87,6 +94,33 @@ export default function PlayScreen() {
     requestId !== entryRequestIdRef.current;
   const invitations: { id: GameId; from: string }[] = [];
   const [joinGameId, setJoinGameId] = useState("");
+  const [joinWagerId, setJoinWagerId] = useState("");
+  const [joinWagerMessage, setJoinWagerMessage] = useState<string | null>(null);
+  const {
+    getLinkedGameId,
+    escrowAddress,
+    wagerTokenAddress,
+    gameAdapterAddress,
+    getWager,
+    getTokenAllowanceForEscrow,
+    approveTokenForEscrow,
+    createWager,
+    cancelWager,
+    acceptWager,
+    resolveWager,
+  } = useWagerEscrow();
+
+  const [wagerDetail, setWagerDetail] = useState<GetWagerOutcome | null>(null);
+  const [wagerDetailGame, setWagerDetailGame] = useState<Game | null>(null);
+  const [wagerDetailBusy, setWagerDetailBusy] = useState(false);
+
+  const [createStake, setCreateStake] = useState("1");
+  const [createOpponent, setCreateOpponent] = useState("");
+  const [createWagerOpen, setCreateWagerOpen] = useState(true);
+  const [createAcceptHours, setCreateAcceptHours] = useState("24");
+  const [createResolveHours, setCreateResolveHours] = useState("168");
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createMsg, setCreateMsg] = useState<string | null>(null);
 
   const colorScheme = useColorScheme() ?? "light";
   const tint = Colors[colorScheme].tint;
@@ -119,6 +153,46 @@ export default function PlayScreen() {
     () => normalizeAddress(account?.address || ""),
     [account?.address]
   );
+
+  const wagerUi = useMemo(() => {
+    const record =
+      wagerDetail?.outcome === "ok" ? wagerDetail.wager : null;
+    let acceptEligibility: ReturnType<typeof getAcceptEligibility> | null =
+      null;
+    if (record && chainNowSecs != null) {
+      acceptEligibility = getAcceptEligibility(
+        record,
+        myAddress,
+        chainNowSecs
+      );
+    }
+    const showAccept =
+      !!record &&
+      acceptEligibility?.ok === true &&
+      !!escrowAddress &&
+      !!wagerTokenAddress;
+    const showCancel =
+      record?.status === "Open" &&
+      !!myAddress &&
+      normalizeAddress(record.creator) === myAddress;
+    const showResolve =
+      !!record &&
+      chainNowSecs != null &&
+      canResolveWagerUi({
+        status: record.status,
+        chainNowUnixSecs: chainNowSecs,
+        resolveBy: record.config.deadlines.resolve_by,
+        gameStatus: wagerDetailGame?.status ?? 0,
+      });
+    return { record, acceptEligibility, showAccept, showCancel, showResolve };
+  }, [
+    wagerDetail,
+    wagerDetailGame,
+    myAddress,
+    chainNowSecs,
+    escrowAddress,
+    wagerTokenAddress,
+  ]);
 
   const chainClock = chainNowSecs ?? -1;
 
@@ -398,6 +472,337 @@ export default function PlayScreen() {
       setIsConfirmingSelection(false);
       setGameStarted(true);
       setJoinGameId("");
+    } finally {
+      if (requestId === entryRequestIdRef.current) {
+        setIsEnteringGame(false);
+      }
+    }
+  }
+
+  async function finalizeGameFromWager(
+    gameId: GameId,
+    requestId: number,
+    setMsg: (v: string | null) => void
+  ): Promise<boolean> {
+    let next: Game | null = null;
+    try {
+      next = await fetchGame(gameId);
+    } catch (error) {
+      if (__DEV__) {
+        console.warn("Failed to load game for wager", error);
+      }
+      setMsg("Linked game ID found but get_game failed.");
+      return false;
+    }
+    if (isStaleEntryRequest(requestId)) return false;
+    if (!next) {
+      setMsg("Game not available yet. Try again shortly.");
+      return false;
+    }
+    if (isStaleEntryRequest(requestId)) return false;
+    loadGame(gameId);
+    commitGameSnapshot(gameId, next);
+    setPendingMove(null);
+    setSelectedMove(null);
+    setIsConfirmingSelection(false);
+    setGameStarted(true);
+    setJoinWagerId("");
+    setMsg(null);
+    return true;
+  }
+
+  async function handleFetchWagerDetail() {
+    const wid = joinWagerId.trim();
+    if (!/^[0-9]+$/.test(wid)) {
+      setJoinWagerMessage("Enter a numeric wager ID.");
+      return;
+    }
+    if (!escrowAddress) {
+      setJoinWagerMessage(
+        "Wager escrow address not set. Add EXPO_PUBLIC_WAGER_ESCROW_CONTRACT_ADDRESS."
+      );
+      return;
+    }
+    setJoinWagerMessage(null);
+    setWagerDetailBusy(true);
+    try {
+      const wo = await getWager(wid);
+      setWagerDetail(wo);
+      setWagerDetailGame(null);
+      if (wo.outcome === "ok") {
+        const linked = await getLinkedGameId(wid);
+        if (linked.outcome === "linked") {
+          const g = await fetchGame(linked.gameId);
+          setWagerDetailGame(g);
+        }
+      }
+    } catch {
+      setWagerDetail({ outcome: "unreadable" });
+    } finally {
+      setWagerDetailBusy(false);
+    }
+  }
+
+  async function handleCreateWager() {
+    if (createBusy) return;
+    setCreateMsg(null);
+    if (!escrowAddress || !wagerTokenAddress || !gameAdapterAddress) {
+      setCreateMsg(
+        "Set EXPO_PUBLIC_WAGER_ESCROW_CONTRACT_ADDRESS, EXPO_PUBLIC_WAGER_TOKEN_ADDRESS, and EXPO_PUBLIC_GAME_ADAPTER_CONTRACT_ADDRESS."
+      );
+      return;
+    }
+    if (chainNowSecs == null) {
+      setCreateMsg("Chain time unavailable. Wait and retry.");
+      return;
+    }
+    const stakeRaw = humanStakeToRawAmount(createStake, WAGER_TOKEN_DECIMALS);
+    if (stakeRaw === null || stakeRaw === 0n) {
+      setCreateMsg("Enter a valid stake amount.");
+      return;
+    }
+    let designated: string;
+    if (createWagerOpen) {
+      designated = normalizeAddress("0x0");
+    } else {
+      const trimmed = createOpponent.trim();
+      if (!trimmed) {
+        setCreateMsg("Enter opponent address for a private wager.");
+        return;
+      }
+      designated = normalizeAddress(trimmed);
+      if (!designated) {
+        setCreateMsg("Invalid opponent address.");
+        return;
+      }
+    }
+    const acceptH = Math.max(1, parseInt(createAcceptHours, 10) || 24);
+    const resolveExtraH = Math.max(1, parseInt(createResolveHours, 10) || 168);
+    const acceptBy = BigInt(chainNowSecs) + BigInt(acceptH * 3600);
+    const resolveBy = acceptBy + BigInt(resolveExtraH * 3600);
+
+    setCreateBusy(true);
+    try {
+      let allowance = await getTokenAllowanceForEscrow();
+      if (allowance === null) {
+        setCreateMsg("Could not read token allowance.");
+        return;
+      }
+      if (allowance < stakeRaw) {
+        const appr = await approveTokenForEscrow(stakeRaw);
+        if (!appr) {
+          setCreateMsg("Token approve failed.");
+          return;
+        }
+        const w = await waitForTransaction(appr);
+        if (!w.success) {
+          setCreateMsg("Approve transaction reverted.");
+          return;
+        }
+      }
+      const result = await createWager({
+        game_adapter: gameAdapterAddress,
+        token: wagerTokenAddress,
+        stake: stakeRaw,
+        deadlines: { accept_by: acceptBy, resolve_by: resolveBy },
+        designated_opponent: designated,
+        game_params: [],
+      });
+      if (!result) {
+        setCreateMsg("Create wager failed.");
+        return;
+      }
+      if (result.wagerId) {
+        setCreateMsg(`Created wager #${result.wagerId}.`);
+        setJoinWagerId(result.wagerId);
+      } else {
+        setCreateMsg("Wager transaction submitted. Check the explorer for the new wager ID.");
+      }
+    } finally {
+      setCreateBusy(false);
+    }
+  }
+
+  async function handleAcceptWagerFlow() {
+    const wid = joinWagerId.trim();
+    if (!/^[0-9]+$/.test(wid) || isEnteringGame) return;
+    setJoinWagerMessage(null);
+    if (chainNowSecs == null) {
+      setJoinWagerMessage("Chain time unavailable.");
+      return;
+    }
+    entryRequestIdRef.current += 1;
+    const requestId = entryRequestIdRef.current;
+    setIsEnteringGame(true);
+    try {
+      const wo = await getWager(wid);
+      if (isStaleEntryRequest(requestId)) return;
+      if (wo.outcome !== "ok") {
+        setJoinWagerMessage("Could not read wager.");
+        return;
+      }
+      const el = getAcceptEligibility(wo.wager, myAddress, chainNowSecs);
+      if (!el.ok) {
+        setJoinWagerMessage(
+          el.reason === "accept_expired"
+            ? "Accept deadline has passed."
+            : "You cannot accept this wager."
+        );
+        return;
+      }
+      const stake = wo.wager.config.stake;
+      const allowance = await getTokenAllowanceForEscrow();
+      if (allowance === null) {
+        setJoinWagerMessage("Could not read token allowance.");
+        return;
+      }
+      if (allowance < stake) {
+        const h = await approveTokenForEscrow(stake);
+        if (!h) {
+          setJoinWagerMessage("Token approve failed.");
+          return;
+        }
+        const w = await waitForTransaction(h);
+        if (!w.success) {
+          setJoinWagerMessage("Approve transaction reverted.");
+          return;
+        }
+      }
+      const accTx = await acceptWager(wid);
+      if (!accTx) {
+        setJoinWagerMessage("Accept transaction failed.");
+        return;
+      }
+      const w2 = await waitForTransaction(accTx);
+      if (!w2.success) {
+        setJoinWagerMessage("Accept transaction reverted.");
+        return;
+      }
+      const linked = await getLinkedGameId(wid);
+      if (linked.outcome !== "linked") {
+        setJoinWagerMessage("Accepted but linked game not ready — try Load matched game.");
+        await handleFetchWagerDetail();
+        return;
+      }
+      await finalizeGameFromWager(linked.gameId, requestId, setJoinWagerMessage);
+      await handleFetchWagerDetail();
+    } finally {
+      if (requestId === entryRequestIdRef.current) {
+        setIsEnteringGame(false);
+      }
+    }
+  }
+
+  async function handleCancelWagerFlow() {
+    const wid = joinWagerId.trim();
+    if (!/^[0-9]+$/.test(wid) || isEnteringGame) return;
+    setJoinWagerMessage(null);
+    entryRequestIdRef.current += 1;
+    const requestId = entryRequestIdRef.current;
+    setIsEnteringGame(true);
+    try {
+      const tx = await cancelWager(wid);
+      if (!tx) {
+        setJoinWagerMessage("Cancel failed.");
+        return;
+      }
+      const w = await waitForTransaction(tx);
+      if (!w.success) {
+        setJoinWagerMessage("Cancel transaction reverted.");
+        return;
+      }
+      await handleFetchWagerDetail();
+    } finally {
+      if (requestId === entryRequestIdRef.current) {
+        setIsEnteringGame(false);
+      }
+    }
+  }
+
+  async function handleResolveWagerFlow() {
+    const wid = joinWagerId.trim();
+    if (!/^[0-9]+$/.test(wid) || isEnteringGame) return;
+    setJoinWagerMessage(null);
+    entryRequestIdRef.current += 1;
+    const requestId = entryRequestIdRef.current;
+    setIsEnteringGame(true);
+    try {
+      const tx = await resolveWager(wid);
+      if (!tx) {
+        setJoinWagerMessage("Resolve failed.");
+        return;
+      }
+      const w = await waitForTransaction(tx);
+      if (!w.success) {
+        setJoinWagerMessage("Resolve transaction reverted.");
+        return;
+      }
+      await handleFetchWagerDetail();
+    } finally {
+      if (requestId === entryRequestIdRef.current) {
+        setIsEnteringGame(false);
+      }
+    }
+  }
+
+  async function handleJoinByWager() {
+    const wid = joinWagerId.trim();
+    if (!/^[0-9]+$/.test(wid) || isEnteringGame) return;
+
+    setJoinWagerMessage(null);
+    if (!escrowAddress) {
+      setJoinWagerMessage(
+        "Wager escrow address not set. Add EXPO_PUBLIC_WAGER_ESCROW_CONTRACT_ADDRESS."
+      );
+      return;
+    }
+
+    entryRequestIdRef.current += 1;
+    const requestId = entryRequestIdRef.current;
+    setIsEnteringGame(true);
+    try {
+      let gameId: GameId;
+      try {
+        const res = await getLinkedGameId(wid);
+        if (isStaleEntryRequest(requestId)) return;
+        switch (res.outcome) {
+          case "linked":
+            gameId = res.gameId;
+            break;
+          case "no_match":
+            setJoinWagerMessage(
+              "No linked game yet (wager open, or match not created on chain)."
+            );
+            return;
+          case "not_found":
+            setJoinWagerMessage(
+              "No wager with this ID on this escrow (or it was rejected as unknown)."
+            );
+            return;
+          case "unreadable":
+            setJoinWagerMessage(
+              "Could not read wager data (network error or unexpected response)."
+            );
+            return;
+          case "escrow_unconfigured":
+            setJoinWagerMessage(
+              "Wager escrow address not set. Add EXPO_PUBLIC_WAGER_ESCROW_CONTRACT_ADDRESS."
+            );
+            return;
+          case "invalid_wager_id":
+            setJoinWagerMessage("Invalid wager ID.");
+            return;
+        }
+      } catch (error) {
+        if (__DEV__) {
+          console.warn("Failed to resolve wager to game", error);
+        }
+        setJoinWagerMessage("Could not read wager from escrow.");
+        return;
+      }
+      if (isStaleEntryRequest(requestId)) return;
+
+      await finalizeGameFromWager(gameId, requestId, setJoinWagerMessage);
     } finally {
       if (requestId === entryRequestIdRef.current) {
         setIsEnteringGame(false);
@@ -819,6 +1224,389 @@ export default function PlayScreen() {
           >
             <Text style={styles.startButtonText}>Join Game</Text>
           </Pressable>
+        </View>
+
+        {escrowAddress && wagerTokenAddress && gameAdapterAddress ? (
+          <View style={styles.inputRow}>
+            <Text style={styles.label}>Create wager</Text>
+            <TextInput
+              value={createStake}
+              onChangeText={setCreateStake}
+              placeholder="Stake (token amount)"
+              placeholderTextColor="#999"
+              keyboardType="decimal-pad"
+              style={[
+                styles.input,
+                {
+                  borderColor:
+                    colorScheme === "dark"
+                      ? "rgba(255,255,255,0.25)"
+                      : "rgba(0,0,0,0.2)",
+                  color: Colors[colorScheme].text,
+                  backgroundColor:
+                    colorScheme === "dark"
+                      ? "rgba(255,255,255,0.06)"
+                      : "rgba(0,0,0,0.03)",
+                },
+              ]}
+            />
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setCreateWagerOpen(true)}
+                style={({ pressed }) => [
+                  styles.startButton,
+                  {
+                    flex: 1,
+                    backgroundColor: createWagerOpen ? tint : "transparent",
+                    borderWidth: createWagerOpen ? 0 : StyleSheet.hairlineWidth * 2,
+                    borderColor: "rgba(127,127,127,0.45)",
+                    opacity: pressed ? 0.85 : 1,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.startButtonText,
+                    !createWagerOpen && { color: Colors[colorScheme].text },
+                  ]}
+                >
+                  Open
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setCreateWagerOpen(false)}
+                style={({ pressed }) => [
+                  styles.startButton,
+                  {
+                    flex: 1,
+                    backgroundColor: !createWagerOpen ? tint : "transparent",
+                    borderWidth: !createWagerOpen ? 0 : StyleSheet.hairlineWidth * 2,
+                    borderColor: "rgba(127,127,127,0.45)",
+                    opacity: pressed ? 0.85 : 1,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.startButtonText,
+                    createWagerOpen && { color: Colors[colorScheme].text },
+                  ]}
+                >
+                  Private
+                </Text>
+              </Pressable>
+            </View>
+            {!createWagerOpen ? (
+              <TextInput
+                value={createOpponent}
+                onChangeText={setCreateOpponent}
+                placeholder="Designated opponent 0x…"
+                placeholderTextColor="#999"
+                autoCapitalize="none"
+                autoCorrect={false}
+                style={[
+                  styles.input,
+                  {
+                    borderColor:
+                      colorScheme === "dark"
+                        ? "rgba(255,255,255,0.25)"
+                        : "rgba(0,0,0,0.2)",
+                    color: Colors[colorScheme].text,
+                    backgroundColor:
+                      colorScheme === "dark"
+                        ? "rgba(255,255,255,0.06)"
+                        : "rgba(0,0,0,0.03)",
+                  },
+                ]}
+              />
+            ) : null}
+            <TextInput
+              value={createAcceptHours}
+              onChangeText={setCreateAcceptHours}
+              placeholder="Accept window (hours)"
+              placeholderTextColor="#999"
+              keyboardType="number-pad"
+              style={[
+                styles.input,
+                {
+                  borderColor:
+                    colorScheme === "dark"
+                      ? "rgba(255,255,255,0.25)"
+                      : "rgba(0,0,0,0.2)",
+                  color: Colors[colorScheme].text,
+                  backgroundColor:
+                    colorScheme === "dark"
+                      ? "rgba(255,255,255,0.06)"
+                      : "rgba(0,0,0,0.03)",
+                },
+              ]}
+            />
+            <TextInput
+              value={createResolveHours}
+              onChangeText={setCreateResolveHours}
+              placeholder="Resolve after accept (hours)"
+              placeholderTextColor="#999"
+              keyboardType="number-pad"
+              style={[
+                styles.input,
+                {
+                  borderColor:
+                    colorScheme === "dark"
+                      ? "rgba(255,255,255,0.25)"
+                      : "rgba(0,0,0,0.2)",
+                  color: Colors[colorScheme].text,
+                  backgroundColor:
+                    colorScheme === "dark"
+                      ? "rgba(255,255,255,0.06)"
+                      : "rgba(0,0,0,0.03)",
+                },
+              ]}
+            />
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => void handleCreateWager()}
+              disabled={createBusy || isEnteringGame}
+              style={({ pressed }) => [
+                styles.startButton,
+                {
+                  backgroundColor: tint,
+                  opacity:
+                    createBusy || isEnteringGame ? 0.5 : pressed ? 0.8 : 1,
+                },
+              ]}
+            >
+              {createBusy ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.startButtonText}>Create wager</Text>
+              )}
+            </Pressable>
+            {createMsg ? (
+              <Text
+                style={{
+                  fontSize: 12,
+                  marginTop: 4,
+                  opacity: 0.9,
+                  color: Colors[colorScheme].text,
+                }}
+              >
+                {createMsg}
+              </Text>
+            ) : null}
+          </View>
+        ) : (
+          <Text
+            style={{
+              fontSize: 11,
+              marginTop: 4,
+              opacity: 0.65,
+              color: Colors[colorScheme].text,
+            }}
+          >
+            Set EXPO_PUBLIC_WAGER_ESCROW_CONTRACT_ADDRESS,
+            EXPO_PUBLIC_WAGER_TOKEN_ADDRESS, and
+            EXPO_PUBLIC_GAME_ADAPTER_CONTRACT_ADDRESS to create wagers.
+          </Text>
+        )}
+
+        <View style={styles.inputRow}>
+          <Text style={styles.label}>Wager by ID</Text>
+          <TextInput
+            value={joinWagerId}
+            onChangeText={(t) => {
+              setJoinWagerId(t);
+              setJoinWagerMessage(null);
+              setWagerDetail(null);
+              setWagerDetailGame(null);
+            }}
+            placeholder="e.g., 1"
+            placeholderTextColor="#999"
+            keyboardType="number-pad"
+            returnKeyType="done"
+            style={[
+              styles.input,
+              {
+                borderColor:
+                  colorScheme === "dark"
+                    ? "rgba(255,255,255,0.25)"
+                    : "rgba(0,0,0,0.2)",
+                color: Colors[colorScheme].text,
+                backgroundColor:
+                  colorScheme === "dark"
+                    ? "rgba(255,255,255,0.06)"
+                    : "rgba(0,0,0,0.03)",
+              },
+            ]}
+          />
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => void handleFetchWagerDetail()}
+              disabled={
+                !/^[0-9]+$/.test(joinWagerId.trim()) ||
+                isEnteringGame ||
+                wagerDetailBusy
+              }
+              style={({ pressed }) => [
+                styles.startButton,
+                {
+                  flex: 1,
+                  backgroundColor: tint,
+                  opacity:
+                    !/^[0-9]+$/.test(joinWagerId.trim()) ||
+                    isEnteringGame ||
+                    wagerDetailBusy
+                      ? 0.5
+                      : pressed
+                        ? 0.8
+                        : 1,
+                },
+              ]}
+            >
+              {wagerDetailBusy ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.startButtonText}>Fetch details</Text>
+              )}
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => void handleJoinByWager()}
+              disabled={
+                !/^[0-9]+$/.test(joinWagerId.trim()) || isEnteringGame
+              }
+              style={({ pressed }) => [
+                styles.startButton,
+                {
+                  flex: 1,
+                  backgroundColor: tint,
+                  opacity:
+                    !/^[0-9]+$/.test(joinWagerId.trim()) || isEnteringGame
+                      ? 0.5
+                      : pressed
+                        ? 0.8
+                        : 1,
+                },
+              ]}
+            >
+              <Text style={styles.startButtonText}>Load matched game</Text>
+            </Pressable>
+          </View>
+          {wagerUi.record ? (
+            <View style={{ gap: 6, marginTop: 4 }}>
+              <Text
+                style={{
+                  fontSize: 12,
+                  color: Colors[colorScheme].text,
+                  opacity: 0.9,
+                }}
+              >
+                Status: {wagerUi.record.status} · Stake:{" "}
+                {wagerUi.record.config.stake.toString()} · Accept by:{" "}
+                {wagerUi.record.config.deadlines.accept_by.toString()}
+              </Text>
+              {wagerUi.record.status === "Matched" && wagerDetailGame ? (
+                <Text
+                  style={{
+                    fontSize: 12,
+                    color: Colors[colorScheme].text,
+                    opacity: 0.85,
+                  }}
+                >
+                  Game result code: {wagerDetailGame.status} (0 = in progress)
+                </Text>
+              ) : null}
+              {wagerUi.acceptEligibility &&
+              !wagerUi.acceptEligibility.ok &&
+              wagerUi.record.status === "Open" ? (
+                <Text style={{ fontSize: 11, opacity: 0.75 }}>
+                  {wagerUi.acceptEligibility.reason === "accept_expired"
+                    ? "Accept deadline passed."
+                    : "You cannot accept this wager."}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            {wagerUi.showAccept ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void handleAcceptWagerFlow()}
+                disabled={isEnteringGame}
+                style={({ pressed }) => [
+                  styles.startButton,
+                  {
+                    minWidth: 100,
+                    backgroundColor: tint,
+                    opacity: isEnteringGame ? 0.5 : pressed ? 0.8 : 1,
+                  },
+                ]}
+              >
+                <Text style={styles.startButtonText}>Accept wager</Text>
+              </Pressable>
+            ) : null}
+            {wagerUi.showCancel ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void handleCancelWagerFlow()}
+                disabled={isEnteringGame}
+                style={({ pressed }) => [
+                  styles.startButton,
+                  {
+                    minWidth: 100,
+                    backgroundColor: "#8b2942",
+                    opacity: isEnteringGame ? 0.5 : pressed ? 0.8 : 1,
+                  },
+                ]}
+              >
+                <Text style={styles.startButtonText}>Cancel wager</Text>
+              </Pressable>
+            ) : null}
+            {wagerUi.showResolve ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void handleResolveWagerFlow()}
+                disabled={isEnteringGame}
+                style={({ pressed }) => [
+                  styles.startButton,
+                  {
+                    minWidth: 100,
+                    backgroundColor: "#2d6a4f",
+                    opacity: isEnteringGame ? 0.5 : pressed ? 0.8 : 1,
+                  },
+                ]}
+              >
+                <Text style={styles.startButtonText}>Resolve</Text>
+              </Pressable>
+            ) : null}
+          </View>
+          {joinWagerMessage ? (
+            <Text
+              style={{
+                fontSize: 12,
+                marginTop: 6,
+                opacity: 0.85,
+                color: Colors[colorScheme].text,
+              }}
+            >
+              {joinWagerMessage}
+            </Text>
+          ) : null}
+          {!escrowAddress ? (
+            <Text
+              style={{
+                fontSize: 11,
+                marginTop: 4,
+                opacity: 0.65,
+                color: Colors[colorScheme].text,
+              }}
+            >
+              Set EXPO_PUBLIC_WAGER_ESCROW_CONTRACT_ADDRESS to enable wager
+              reads and actions.
+            </Text>
+          ) : null}
         </View>
 
         {invitations.length > 0 && !gameStarted && (

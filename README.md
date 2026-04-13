@@ -7,8 +7,11 @@
 Create `app/.env` and define:
 
 - `EXPO_PUBLIC_ENABLE_STARKNET` (required): Set to `true` or `1`
-- `EXPO_PUBLIC_TIC_TAC_TOE_CONTRACT_ADDRESS` (required): Deployed TicTacToe contract address
+- `EXPO_PUBLIC_TIC_TAC_TOE_CONTRACT_ADDRESS` (required): Deployed UTTT (`tictactoe`) contract address
 - `EXPO_PUBLIC_STARKNET_NETWORK` (required): `SN_SEPOLIA` or `SN_MAIN`
+- `EXPO_PUBLIC_WAGER_ESCROW_CONTRACT_ADDRESS` (optional): Deployed `wager_escrow`; wager create/accept/resolve stay limited when unset
+- `EXPO_PUBLIC_WAGER_TOKEN_ADDRESS` (optional): ERC20 used for stakes; must match escrow `approved_token` when using wagers
+- `EXPO_PUBLIC_GAME_ADAPTER_CONTRACT_ADDRESS` (optional): `IGameAdapter` address aligned with escrow allowlist and wager config
 - `EXPO_PUBLIC_ALCHEMY_API_KEY` (recommended): Alchemy key used to construct default RPC URLs
 - `EXPO_PUBLIC_SEPOLIA_RPC_URL` (recommended): RPC endpoint for `SN_SEPOLIA`
 - `EXPO_PUBLIC_MAINNET_RPC_URL` (recommended): RPC endpoint for `SN_MAIN`
@@ -19,6 +22,9 @@ Example `app/.env`:
 ```bash
 EXPO_PUBLIC_ENABLE_STARKNET=true
 EXPO_PUBLIC_TIC_TAC_TOE_CONTRACT_ADDRESS=0x1234...
+EXPO_PUBLIC_WAGER_ESCROW_CONTRACT_ADDRESS=0x...
+EXPO_PUBLIC_WAGER_TOKEN_ADDRESS=0x...
+EXPO_PUBLIC_GAME_ADAPTER_CONTRACT_ADDRESS=0x...
 EXPO_PUBLIC_STARKNET_NETWORK=SN_SEPOLIA
 EXPO_PUBLIC_ALCHEMY_API_KEY=<ALCHEMY_API_KEY>
 EXPO_PUBLIC_SEPOLIA_RPC_URL=https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/<ALCHEMY_API_KEY>
@@ -49,71 +55,71 @@ EXPO_PUBLIC_AVNU_API_KEY=
 
 The `wager_escrow` contract escrows stakes in **one** ERC20: the deploy-time `approved_token` (must be a non-zero address). Every wager’s `WagerConfig.token` must match that address. **Fee-on-transfer**, **rebasing**, and other non-standard balance semantics are unsupported; raw `u256` amounts are used on-chain and **decimals are a display concern** for clients. Run Cairo tests with `cd contracts && snforge test`.
 
-## Deploy to Sepolia
+## Deploy to Sepolia (and local RPC)
 
-This project includes a helper script to build, declare, and deploy the contract to Starknet Sepolia.
+Tool versions are pinned in [`.tool-versions`](.tool-versions) (Scarb, Starkli). Full details: [`contracts/DEPLOY.md`](contracts/DEPLOY.md).
 
 ### Prerequisites
-- Scarb (to build Cairo contracts)
-- Starkli (CLI)
 
-Install Starkli quickly:
+- Scarb, Starkli (see [`contracts/DEPLOY.md`](contracts/DEPLOY.md))
+- `jq` recommended (ABI export and optional deployer resolution)
+
+Install Starkli:
 
 ```bash
 curl -L https://get.starkli.sh | sh
 ```
 
-### Required environment
-The script uses these variables (it will auto-load a `.env` in the repo root if they are not already set):
+Copy [`contracts/.env.example`](contracts/.env.example) to the **repo root** `.env` and fill in paths and RPC.
 
-- `STARKNET_KEYSTORE` (required): Path to your keystore JSON
-- `STARKNET_ACCOUNT` (required): Path to your account JSON
-- `TICTACTOE_GAME_CREATOR` (required): Contract address (hex) stored at deploy time; only this address may call `create_game_for` (use your game adapter or escrow as appropriate)
-- `STARKNET_RPC` or `STARKNET_RPC_URL` (recommended): Explicit RPC URL (takes precedence over `STARKNET_NETWORK`)
-- `STARKNET_NETWORK` (optional): Network alias, defaults to `sepolia` when an explicit RPC is not provided
-- `TICTACTOE_CLASS_HASH` (optional): If set, skips the declare step and deploys this class hash
+### Reference (mock) stack — `deploy-stack.sh`
 
-Example `.env` (recommended):
+Deploys `mock_erc20` (optional), `mock_game_adapter`, UTTT (`tictactoe`), and `wager_escrow` in order. Prints suggested `EXPO_PUBLIC_*` lines at the end.
 
 ```bash
-STARKNET_KEYSTORE=/Users/you/.starkli/sepolia/deployer_keystore.json
-STARKNET_ACCOUNT=/Users/you/.starkli/sepolia/deployer_account.json
-STARKNET_NETWORK=sepolia
-# Use a compatible Alchemy RPC (v0_10 or v0_9)
-STARKNET_RPC=https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/<ALCHEMY_API_KEY>
-TICTACTOE_GAME_CREATOR=0x...
+./contracts/deploy-stack.sh
 ```
 
-### Run the deploy script
+Important: this flow matches the **in-tree mock adapter**. A future **production UTTT bridge adapter** has a different on-chain dependency story (see [`contracts/DEPLOY.md`](contracts/DEPLOY.md)).
+
+### UTTT only — `deploy-sepolia.sh`
+
+Builds, declares, and deploys **only** the game contract (same as before):
 
 ```bash
 ./contracts/deploy-sepolia.sh
 ```
 
-What it does:
-- Builds the contract with Scarb
-- Declares the Sierra class (unless `TICTACTOE_CLASS_HASH` is provided)
-- Deploys the contract with constructor calldata `TICTACTOE_GAME_CREATOR` and prints the deployed address
+### Environment (summary)
 
-Notes:
-- If both `STARKNET_RPC`/`STARKNET_RPC_URL` and `STARKNET_NETWORK` are set, the script uses the explicit RPC (via `--rpc`).
-- The script sanitizes the parsed class hash to avoid “Failed to create Felt from string” errors.
+| Variable | Scripts | Purpose |
+|----------|---------|---------|
+| `STARKNET_KEYSTORE`, `STARKNET_ACCOUNT` | both | Account signing |
+| `STARKNET_RPC` or `STARKNET_RPC_URL` | both | JSON-RPC (preferred over `STARKNET_NETWORK`) |
+| `STARKNET_NETWORK` | both | Default `sepolia` if no explicit RPC |
+| `TICTACTOE_GAME_CREATOR` | `deploy-sepolia.sh` | UTTT constructor: `create_game_for` authority |
+| `TICTACTOE_CLASS_HASH` | `deploy-sepolia.sh` | Skip declare if set |
+| `DEPLOY_MOCK_TOKEN`, `WAGER_ESCROW_*`, `MOCK_*_CLASS_HASH`, … | `deploy-stack.sh` | See [`contracts/.env.example`](contracts/.env.example) |
+
+### Export ABIs for the app
+
+After `scarb build`, generate JSON ABIs consumed under `app/app/abis/`:
+
+```bash
+./contracts/scripts/export-abis.sh
+```
+
+Or from `app/`: `npm run export-abis`
 
 ### Quick verification
 
-Check the provider and network are reachable:
-
 ```bash
 starkli --rpc "$STARKNET_RPC" block-number
-```
-
-Verify an address’ class hash on Sepolia:
-
-```bash
-starkli --rpc "$STARKNET_RPC" class-hash-at 0xDEADBEEF...
+starkli --rpc "$STARKNET_RPC" class-hash-at 0x...
 ```
 
 ### Troubleshooting
+
 - JSON-RPC spec mismatch (for example v0_9 vs v0_10): use a compatible Alchemy endpoint such as `https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/<ALCHEMY_API_KEY>` (or `.../v0_9/<ALCHEMY_API_KEY>`).
-- “Failed to create Felt from string”: ensure the class hash is a valid lowercase hex with `0x` prefix. The script also recomputes/sanitizes it automatically.
+- “Failed to create Felt from string”: ensure class hashes use lowercase hex with `0x` prefix.
 - `command not found: starkli`: install Starkli and re-open your shell.

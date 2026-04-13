@@ -26,6 +26,8 @@ cp .env.example .env
 Useful env vars:
 
 - `EXPO_PUBLIC_STARKNET_NETWORK`: `SN_SEPOLIA` or `SN_MAIN`
+- `EXPO_PUBLIC_TIC_TAC_TOE_CONTRACT_ADDRESS`: deployed game contract
+- `EXPO_PUBLIC_WAGER_ESCROW_CONTRACT_ADDRESS` (optional): deployed wager escrow; wager join flows stay disabled when unset
 - `EXPO_PUBLIC_CARTRIDGE_RPC`
 - `EXPO_PUBLIC_CARTRIDGE_URL`
 - `EXPO_PUBLIC_CARTRIDGE_REDIRECT_URL` (optional override)

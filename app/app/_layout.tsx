@@ -13,6 +13,7 @@ import "react-native-reanimated";
 import { useColorScheme } from "@/components/useColorScheme";
 import { StarknetConnectorProvider } from "./context/StarknetConnector";
 import { TicTacToeProvider } from "./context/TicTacToeContractConnector";
+import { WagerEscrowProvider } from "./context/WagerEscrowContractConnector";
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -58,12 +59,14 @@ function RootLayoutNav() {
   return (
     <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
       <StarknetConnectorProvider>
-        <TicTacToeProvider>
-          <Stack>
-            <Stack.Screen name="index" options={{ headerShown: false }} />
-            <Stack.Screen name="modal" options={{ presentation: "modal" }} />
-          </Stack>
-        </TicTacToeProvider>
+        <WagerEscrowProvider>
+          <TicTacToeProvider>
+            <Stack>
+              <Stack.Screen name="index" options={{ headerShown: false }} />
+              <Stack.Screen name="modal" options={{ presentation: "modal" }} />
+            </Stack>
+          </TicTacToeProvider>
+        </WagerEscrowProvider>
       </StarknetConnectorProvider>
     </ThemeProvider>
   );
