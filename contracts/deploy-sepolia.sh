@@ -9,8 +9,8 @@ PROJECT_ROOT=$SCRIPT_DIR/..
 POLL_INTERVAL_SECONDS=${TICTACTOE_POLL_INTERVAL_SECONDS:-5}
 MAX_CLASS_WAIT_ATTEMPTS=${TICTACTOE_MAX_CLASS_WAIT_ATTEMPTS:-24}
 
-# Load env variable from `.env` only if they're not already set
-if [ -z "$STARKNET_KEYSTORE" ] || [ -z "$STARKNET_ACCOUNT" ] || [ -z "$STARKNET_NETWORK" ] || { [ -z "$STARKNET_RPC" ] && [ -z "$STARKNET_RPC_URL" ]; }; then
+# Load repo `.env` when any deploy-related var is still unset (including constructor calldata).
+if [ -z "$STARKNET_KEYSTORE" ] || [ -z "$STARKNET_ACCOUNT" ] || [ -z "$STARKNET_NETWORK" ] || { [ -z "$STARKNET_RPC" ] && [ -z "$STARKNET_RPC_URL" ]; } || [ -z "${TICTACTOE_GAME_CREATOR:-}" ]; then
   if [ -f "$PROJECT_ROOT/.env" ]; then
     # shellcheck disable=SC1090
     source "$PROJECT_ROOT/.env"
@@ -23,6 +23,9 @@ if [ -z "$STARKNET_KEYSTORE" ]; then
   exit 1
 elif [ -z "$STARKNET_ACCOUNT" ]; then
   echo "Error: STARKNET_ACCOUNT is not set."
+  exit 1
+elif [ -z "${TICTACTOE_GAME_CREATOR:-}" ]; then
+  echo "Error: TICTACTOE_GAME_CREATOR is not set (authorized adapter or escrow address for constructor)."
   exit 1
 fi
 
@@ -50,6 +53,7 @@ display_help() {
   echo "   STARKNET_RPC        Explicit RPC URL (takes precedence over network)"
   echo "   STARKNET_RPC_URL    Alias of STARKNET_RPC (takes precedence over network)"
   echo "   TICTACTOE_CLASS_HASH Optional: existing declared class hash to skip declare"
+  echo "   TICTACTOE_GAME_CREATOR Required: ContractAddress (hex) passed to constructor as authorized create_game_for caller"
   echo "   TICTACTOE_POLL_INTERVAL_SECONDS Optional: seconds between declare visibility checks (default: 5)"
   echo "   TICTACTOE_MAX_CLASS_WAIT_ATTEMPTS Optional: number of declare visibility checks before failing (default: 24)"
   echo
@@ -173,10 +177,10 @@ else
   TICTACTOE_CONTRACT_CLASS_HASH=$TICTACTOE_CLASS_HASH
 fi
 
-# Deploying the contract (no constructor args for TicTacToe)
+# Deploying the contract (constructor: game_creator)
 echo "Deploying the contract..."
-echo "starkli deploy ${PROVIDER_ARGS[*]} --keystore $STARKNET_KEYSTORE --account $STARKNET_ACCOUNT $TICTACTOE_CONTRACT_CLASS_HASH"
-DEPLOY_OUTPUT=$(starkli deploy "${PROVIDER_ARGS[@]}" --keystore "$STARKNET_KEYSTORE" --account "$STARKNET_ACCOUNT" "$TICTACTOE_CONTRACT_CLASS_HASH" 2>&1)
+echo "starkli deploy ${PROVIDER_ARGS[*]} --keystore $STARKNET_KEYSTORE --account $STARKNET_ACCOUNT $TICTACTOE_CONTRACT_CLASS_HASH $TICTACTOE_GAME_CREATOR"
+DEPLOY_OUTPUT=$(starkli deploy "${PROVIDER_ARGS[@]}" --keystore "$STARKNET_KEYSTORE" --account "$STARKNET_ACCOUNT" "$TICTACTOE_CONTRACT_CLASS_HASH" "$TICTACTOE_GAME_CREATOR" 2>&1)
 echo "$DEPLOY_OUTPUT"
 DEPLOYED_ADDRESS=$(echo "$DEPLOY_OUTPUT" | grep -iE "Contract address|Address" | awk '{print $NF}')
 if [ -n "$DEPLOYED_ADDRESS" ]; then

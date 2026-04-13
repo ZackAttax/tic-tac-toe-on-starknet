@@ -129,6 +129,24 @@
       {
         "name": "completed_locals",
         "type": "core::integer::u8"
+      },
+      {
+        "name": "wager_id",
+        "type": "core::integer::u64"
+      }
+    ]
+  },
+  {
+    "type": "enum",
+    "name": "core::bool",
+    "variants": [
+      {
+        "name": "False",
+        "type": "()"
+      },
+      {
+        "name": "True",
+        "type": "()"
       }
     ]
   },
@@ -143,6 +161,34 @@
           {
             "name": "opponent",
             "type": "core::starknet::contract_address::ContractAddress"
+          }
+        ],
+        "outputs": [
+          {
+            "type": "core::integer::u64"
+          }
+        ],
+        "state_mutability": "external"
+      },
+      {
+        "type": "function",
+        "name": "create_game_for",
+        "inputs": [
+          {
+            "name": "player_x",
+            "type": "core::starknet::contract_address::ContractAddress"
+          },
+          {
+            "name": "player_o",
+            "type": "core::starknet::contract_address::ContractAddress"
+          },
+          {
+            "name": "wager_id",
+            "type": "core::integer::u64"
+          },
+          {
+            "name": "config",
+            "type": "core::array::Array::<core::felt252>"
           }
         ],
         "outputs": [
@@ -203,6 +249,80 @@
           }
         ],
         "state_mutability": "view"
+      },
+      {
+        "type": "function",
+        "name": "is_final",
+        "inputs": [
+          {
+            "name": "game_id",
+            "type": "core::integer::u64"
+          }
+        ],
+        "outputs": [
+          {
+            "type": "core::bool"
+          }
+        ],
+        "state_mutability": "view"
+      },
+      {
+        "type": "function",
+        "name": "get_result",
+        "inputs": [
+          {
+            "name": "game_id",
+            "type": "core::integer::u64"
+          }
+        ],
+        "outputs": [
+          {
+            "type": "core::integer::u8"
+          }
+        ],
+        "state_mutability": "view"
+      },
+      {
+        "type": "function",
+        "name": "get_players",
+        "inputs": [
+          {
+            "name": "game_id",
+            "type": "core::integer::u64"
+          }
+        ],
+        "outputs": [
+          {
+            "type": "(core::starknet::contract_address::ContractAddress, core::starknet::contract_address::ContractAddress)"
+          }
+        ],
+        "state_mutability": "view"
+      },
+      {
+        "type": "function",
+        "name": "get_wager_id",
+        "inputs": [
+          {
+            "name": "game_id",
+            "type": "core::integer::u64"
+          }
+        ],
+        "outputs": [
+          {
+            "type": "core::integer::u64"
+          }
+        ],
+        "state_mutability": "view"
+      }
+    ]
+  },
+  {
+    "type": "constructor",
+    "name": "constructor",
+    "inputs": [
+      {
+        "name": "game_creator",
+        "type": "core::starknet::contract_address::ContractAddress"
       }
     ]
   },
@@ -224,6 +344,11 @@
       {
         "name": "player_o",
         "type": "core::starknet::contract_address::ContractAddress",
+        "kind": "data"
+      },
+      {
+        "name": "wager_id",
+        "type": "core::integer::u64",
         "kind": "data"
       }
     ]

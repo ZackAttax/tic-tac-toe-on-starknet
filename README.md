@@ -64,6 +64,7 @@ The script uses these variables (it will auto-load a `.env` in the repo root if 
 
 - `STARKNET_KEYSTORE` (required): Path to your keystore JSON
 - `STARKNET_ACCOUNT` (required): Path to your account JSON
+- `TICTACTOE_GAME_CREATOR` (required): Contract address (hex) stored at deploy time; only this address may call `create_game_for` (use your game adapter or escrow as appropriate)
 - `STARKNET_RPC` or `STARKNET_RPC_URL` (recommended): Explicit RPC URL (takes precedence over `STARKNET_NETWORK`)
 - `STARKNET_NETWORK` (optional): Network alias, defaults to `sepolia` when an explicit RPC is not provided
 - `TICTACTOE_CLASS_HASH` (optional): If set, skips the declare step and deploys this class hash
@@ -76,6 +77,7 @@ STARKNET_ACCOUNT=/Users/you/.starkli/sepolia/deployer_account.json
 STARKNET_NETWORK=sepolia
 # Use a compatible Alchemy RPC (v0_10 or v0_9)
 STARKNET_RPC=https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/<ALCHEMY_API_KEY>
+TICTACTOE_GAME_CREATOR=0x...
 ```
 
 ### Run the deploy script
@@ -87,7 +89,7 @@ STARKNET_RPC=https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/<
 What it does:
 - Builds the contract with Scarb
 - Declares the Sierra class (unless `TICTACTOE_CLASS_HASH` is provided)
-- Deploys the contract and prints the deployed address
+- Deploys the contract with constructor calldata `TICTACTOE_GAME_CREATOR` and prints the deployed address
 
 Notes:
 - If both `STARKNET_RPC`/`STARKNET_RPC_URL` and `STARKNET_NETWORK` are set, the script uses the explicit RPC (via `--rpc`).

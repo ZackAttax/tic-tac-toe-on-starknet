@@ -1,28 +1,36 @@
-use starknet::ContractAddress;
+use core::array::ArrayTrait;
 use core::option::OptionTrait;
 use core::traits::TryInto;
 use snforge_std::{
-    declare, ContractClassTrait, DeclareResultTrait, start_cheat_caller_address, stop_cheat_caller_address,
-    spy_events, EventSpy, EventSpyAssertionsTrait, EventSpyTrait, EventsFilterTrait,
+    ContractClassTrait, DeclareResultTrait, EventSpy, EventSpyAssertionsTrait, EventSpyTrait,
+    EventsFilterTrait, declare, spy_events, start_cheat_caller_address, stop_cheat_caller_address,
+};
+use starknet::ContractAddress;
+use tic_tac_toe::tic_tac_toe::tictactoe::{
+    Event, Game, GameCreated, GameDraw, GameMeta, GameWon, LocalBoard, MovePlayed,
+};
+use tic_tac_toe::tic_tac_toe::{
+    ITicTacToeDispatcher, ITicTacToeDispatcherTrait, ITicTacToeSafeDispatcher,
+    ITicTacToeSafeDispatcherTrait,
 };
 
-use tic_tac_toe::tic_tac_toe::ITicTacToeDispatcher;
-use tic_tac_toe::tic_tac_toe::ITicTacToeDispatcherTrait;
-use tic_tac_toe::tic_tac_toe::ITicTacToeSafeDispatcher;
-use tic_tac_toe::tic_tac_toe::ITicTacToeSafeDispatcherTrait;
-use tic_tac_toe::tic_tac_toe::tictactoe::{
-    Event, GameCreated, GameWon, GameDraw, MovePlayed, Game, GameMeta, LocalBoard,
-};
+fn deploy_with_creator(game_creator: ContractAddress) -> ContractAddress {
+    let contract = declare("tictactoe").unwrap().contract_class();
+    let mut calldata = array![];
+    calldata.append(game_creator.into());
+    let (addr, _) = contract.deploy(@calldata).unwrap();
+    addr
+}
 
 fn deploy() -> ContractAddress {
-    let contract = declare("tictactoe").unwrap().contract_class();
-    let (addr, _) = contract.deploy(@ArrayTrait::new()).unwrap();
-    addr
+    deploy_with_creator(P3)
 }
 
 const P0: ContractAddress = 0.try_into().unwrap();
 const P1: ContractAddress = 1.try_into().unwrap();
 const P2: ContractAddress = 2.try_into().unwrap();
+/// Address used as `game_creator` in `deploy()` (authorized `create_game_for` caller).
+const P3: ContractAddress = 3.try_into().unwrap();
 
 /// `assert` / `panic_with_felt252` encode the reason as `array![felt252]`.
 fn assert_revert_with_felt252(mut panic_data: Array<felt252>, expected: felt252) {
@@ -31,17 +39,19 @@ fn assert_revert_with_felt252(mut panic_data: Array<felt252>, expected: felt252)
     assert(first == expected, 'bad_panic_val');
 }
 
-/// Exactly `expected` events from `contract_address` in the current spy buffer (see `spy_events` docs).
+/// Exactly `expected` events from `contract_address` in the current spy buffer (see `spy_events`
+/// docs).
 fn assert_contract_emitted_by_count(
-    ref spy: EventSpy, contract_address: ContractAddress, expected: usize
+    ref spy: EventSpy, contract_address: ContractAddress, expected: usize,
 ) {
     let evs = spy.get_events().emitted_by(contract_address);
     assert(evs.events.len() == expected, 'evt_cnt');
 }
 
-/// No emitted event from `contract_address` may use `forbidden` as the first event key (event name selector).
+/// No emitted event from `contract_address` may use `forbidden` as the first event key (event name
+/// selector).
 fn assert_contract_events_exclude_first_key(
-    ref spy: EventSpy, contract_address: ContractAddress, forbidden: felt252, err: felt252
+    ref spy: EventSpy, contract_address: ContractAddress, forbidden: felt252, err: felt252,
 ) {
     let evs = spy.get_events().emitted_by(contract_address);
     for (_, raw) in evs.events.span() {
@@ -63,7 +73,8 @@ fn lb(game: @Game, i: u8) -> LocalBoard {
     }
 }
 
-/// Ground truth for incremental `GameMeta`: OR meta bits from finished local wins; count all finished locals.
+/// Ground truth for incremental `GameMeta`: OR meta bits from finished local wins; count all
+/// finished locals.
 fn derive_meta_from_boards(g: @Game) -> (u16, u16, u8) {
     let mut mx: u16 = 0_u16;
     let mut mo: u16 = 0_u16;
@@ -83,7 +94,7 @@ fn derive_meta_from_boards(g: @Game) -> (u16, u16, u8) {
             completed = completed + 1_u8;
         }
         i = i + 1_u8;
-    };
+    }
     (mx, mo, completed)
 }
 
@@ -103,6 +114,7 @@ fn assert_meta_eq(a: GameMeta, b: GameMeta) {
     assert(a.meta_x_bits == b.meta_x_bits, 'm_mx');
     assert(a.meta_o_bits == b.meta_o_bits, 'm_mo');
     assert(a.completed_locals == b.completed_locals, 'm_cl');
+    assert(a.wager_id == b.wager_id, 'm_wid');
 }
 
 #[test]
@@ -122,7 +134,7 @@ fn test_create_initial_state() {
                 (
                     contract_address,
                     Event::GameCreated(
-                        GameCreated { game_id, player_x: P1, player_o: P2 },
+                        GameCreated { game_id, player_x: P1, player_o: P2, wager_id: 0_u64 },
                     ),
                 ),
             ],
@@ -151,10 +163,11 @@ fn test_create_initial_state() {
         let b = lb(@g, i);
         assert(b.x_bits == 0_u16 && b.o_bits == 0_u16 && b.status == 0_u8, 'bad_lb');
         i = i + 1_u8;
-    };
+    }
 
     let m = dispatcher.get_game_meta(game_id);
     assert_meta_matches_game(m, @g);
+    assert(m.wager_id == 0_u64, 'bad_wid');
 }
 
 #[feature("safe_dispatcher")]
@@ -287,7 +300,8 @@ fn test_forced_board_succeeds() {
     assert(g.next_board == 4_u8, 'forced_ok');
 }
 
-/// When the routed target board is already finished, `next_board` becomes 9 and the player may choose any unfinished local board.
+/// When the routed target board is already finished, `next_board` becomes 9 and the player may
+/// choose any unfinished local board.
 #[test]
 fn test_free_choice_immediate_after_forced_target_finished() {
     let contract_address = deploy();
@@ -592,7 +606,8 @@ fn test_local_board_draw() {
     assert_meta_matches_game(m, @g);
 }
 
-/// All nine locals finished without a meta winner — global draw (status 3). Sequence from offline search (seed 0).
+/// All nine locals finished without a meta winner — global draw (status 3). Sequence from offline
+/// search (seed 0).
 #[test]
 fn test_global_game_draw() {
     let contract_address = deploy();
@@ -833,6 +848,12 @@ fn test_global_game_draw() {
 
     let g = dispatcher.get_game(game_id);
     assert(g.status == 3_u8, 'global_draw');
+    assert(dispatcher.is_final(game_id), 'v2d_nf');
+    assert(dispatcher.get_result(game_id) == 3_u8, 'v2d_gr');
+    let (px, po) = dispatcher.get_players(game_id);
+    assert(px == P1, 'v2d_px');
+    assert(po == P2, 'v2d_po');
+    assert(dispatcher.get_wager_id(game_id) == 0_u64, 'v2d_wid');
     let mut i: u8 = 0_u8;
     loop {
         if i > 8_u8 {
@@ -852,7 +873,8 @@ fn test_global_x_wins_meta_row() {
     let game_id = dispatcher.create_game(P2);
     stop_cheat_caller_address(contract_address);
 
-    // Meta middle row: win locals 3, 4, 5. After each local win, O bridges to the next target board.
+    // Meta middle row: win locals 3, 4, 5. After each local win, O bridges to the next target
+    // board.
     // Win board 3
     start_cheat_caller_address(contract_address, P1);
     dispatcher.play_move(game_id, 3_u8, 0_u8);
@@ -917,10 +939,7 @@ fn test_global_x_wins_meta_row() {
     spy
         .assert_emitted(
             @array![
-                (
-                    contract_address,
-                    Event::GameWon(GameWon { game_id, winner: P1, status: 1_u8 }),
-                ),
+                (contract_address, Event::GameWon(GameWon { game_id, winner: P1, status: 1_u8 })),
             ],
         );
     assert_contract_events_exclude_first_key(
@@ -952,6 +971,12 @@ fn test_global_x_wins_meta_row() {
     assert(lb(@g, 4_u8).status == 1_u8, 'b4');
     assert(lb(@g, 5_u8).status == 1_u8, 'b5');
     assert(g.status == 1_u8, 'x_meta_row');
+    assert(dispatcher.is_final(game_id), 'v2_nf');
+    assert(dispatcher.get_result(game_id) == 1_u8, 'v2_gr');
+    let (px, po) = dispatcher.get_players(game_id);
+    assert(px == P1, 'v2_px');
+    assert(po == P2, 'v2_po');
+    assert(dispatcher.get_wager_id(game_id) == 0_u64, 'v2_wid');
 }
 
 #[test]
@@ -1026,10 +1051,7 @@ fn test_global_o_wins_meta_row() {
     spy
         .assert_emitted(
             @array![
-                (
-                    contract_address,
-                    Event::GameWon(GameWon { game_id, winner: P2, status: 2_u8 }),
-                ),
+                (contract_address, Event::GameWon(GameWon { game_id, winner: P2, status: 2_u8 })),
             ],
         );
     assert_contract_events_exclude_first_key(
@@ -1237,4 +1259,116 @@ fn test_game_over_no_moves() {
         Result::Err(_) => {},
     }
     stop_cheat_caller_address(contract_address);
+}
+
+#[test]
+fn test_create_game_for_success_and_reads() {
+    let contract_address = deploy();
+    let dispatcher = ITicTacToeDispatcher { contract_address };
+    let mut spy = spy_events();
+
+    start_cheat_caller_address(contract_address, P3);
+    let game_id = dispatcher.create_game_for(P1, P2, 42_u64, array![]);
+    stop_cheat_caller_address(contract_address);
+
+    assert_contract_emitted_by_count(ref spy, contract_address, 1_usize);
+    spy
+        .assert_emitted(
+            @array![
+                (
+                    contract_address,
+                    Event::GameCreated(
+                        GameCreated { game_id, player_x: P1, player_o: P2, wager_id: 42_u64 },
+                    ),
+                ),
+            ],
+        );
+
+    assert(dispatcher.is_final(game_id) == false, 'nf');
+    assert(dispatcher.get_result(game_id) == 0_u8, 'gr');
+    let (px, po) = dispatcher.get_players(game_id);
+    assert(px == P1, 'px');
+    assert(po == P2, 'po');
+    assert(dispatcher.get_wager_id(game_id) == 42_u64, 'wid');
+}
+
+#[feature("safe_dispatcher")]
+#[test]
+fn test_create_game_for_rejects_not_creator() {
+    let contract_address = deploy();
+    let safe = ITicTacToeSafeDispatcher { contract_address };
+
+    start_cheat_caller_address(contract_address, P1);
+    match safe.create_game_for(P1, P2, 1_u64, array![]) {
+        Result::Ok(_) => core::panic_with_felt252('expect_revert'),
+        Result::Err(panic_data) => assert_revert_with_felt252(panic_data, 'not_creator'),
+    }
+    stop_cheat_caller_address(contract_address);
+}
+
+#[feature("safe_dispatcher")]
+#[test]
+fn test_create_game_for_rejects_zero_player_x() {
+    let contract_address = deploy();
+    let safe = ITicTacToeSafeDispatcher { contract_address };
+
+    start_cheat_caller_address(contract_address, P3);
+    match safe.create_game_for(P0, P2, 1_u64, array![]) {
+        Result::Ok(_) => core::panic_with_felt252('expect_revert'),
+        Result::Err(panic_data) => assert_revert_with_felt252(panic_data, 'zero_px'),
+    }
+    stop_cheat_caller_address(contract_address);
+}
+
+#[feature("safe_dispatcher")]
+#[test]
+fn test_create_game_for_rejects_bad_wager() {
+    let contract_address = deploy();
+    let safe = ITicTacToeSafeDispatcher { contract_address };
+
+    start_cheat_caller_address(contract_address, P3);
+    match safe.create_game_for(P1, P2, 0_u64, array![]) {
+        Result::Ok(_) => core::panic_with_felt252('expect_revert'),
+        Result::Err(panic_data) => assert_revert_with_felt252(panic_data, 'bad_wager'),
+    }
+    stop_cheat_caller_address(contract_address);
+}
+
+#[feature("safe_dispatcher")]
+#[test]
+fn test_create_game_for_rejects_nonempty_config() {
+    let contract_address = deploy();
+    let safe = ITicTacToeSafeDispatcher { contract_address };
+
+    start_cheat_caller_address(contract_address, P3);
+    match safe.create_game_for(P1, P2, 1_u64, array![1_felt252]) {
+        Result::Ok(_) => core::panic_with_felt252('expect_revert'),
+        Result::Err(panic_data) => assert_revert_with_felt252(panic_data, 'bad_config'),
+    }
+    stop_cheat_caller_address(contract_address);
+}
+
+#[feature("safe_dispatcher")]
+#[test]
+fn test_v2_getters_reject_unknown_game() {
+    let contract_address = deploy();
+    let safe = ITicTacToeSafeDispatcher { contract_address };
+
+    let bad_id: u64 = 9_u64;
+    match safe.is_final(bad_id) {
+        Result::Ok(_) => core::panic_with_felt252('expect_revert'),
+        Result::Err(panic_data) => assert_revert_with_felt252(panic_data, 'unknown_game'),
+    }
+    match safe.get_result(bad_id) {
+        Result::Ok(_) => core::panic_with_felt252('expect_revert'),
+        Result::Err(panic_data) => assert_revert_with_felt252(panic_data, 'unknown_game'),
+    }
+    match safe.get_players(bad_id) {
+        Result::Ok(_) => core::panic_with_felt252('expect_revert'),
+        Result::Err(panic_data) => assert_revert_with_felt252(panic_data, 'unknown_game'),
+    }
+    match safe.get_wager_id(bad_id) {
+        Result::Ok(_) => core::panic_with_felt252('expect_revert'),
+        Result::Err(panic_data) => assert_revert_with_felt252(panic_data, 'unknown_game'),
+    }
 }

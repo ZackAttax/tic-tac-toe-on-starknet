@@ -2,7 +2,6 @@ use core::option::OptionTrait;
 use core::serde::Serde;
 use core::traits::TryInto;
 use starknet::ContractAddress;
-
 use tic_tac_toe::protocol::{
     MatchOutcome, MatchRef, WagerConfig, WagerDeadlines, WagerRecord, WagerStatus,
 };
@@ -29,11 +28,7 @@ fn test_wager_config_serde_roundtrip() {
     let deadlines = WagerDeadlines { accept_by: 10_u64, resolve_by: 99_u64 };
     let game_params = array![7_felt252, 8_felt252, 9_felt252];
     let config = WagerConfig {
-        game_adapter: addr(1),
-        token: addr(2),
-        stake: 42_u256,
-        deadlines,
-        game_params,
+        game_adapter: addr(1), token: addr(2), stake: 42_u256, deadlines, game_params,
     };
 
     let mut serialized = array![];

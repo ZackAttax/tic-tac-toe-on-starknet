@@ -1,26 +1,40 @@
 // SPDX-License-Identifier: MIT
 // Cairo 1.x — Starknet Ultimate TicTacToe
+//
+// `GameMeta.status` / `get_result`: 0 ongoing, 1 X won, 2 O won, 3 draw.
 
 use starknet::ContractAddress;
 
 #[starknet::interface]
 pub trait ITicTacToe<TContractState> {
     fn create_game(ref self: TContractState, opponent: ContractAddress) -> u64;
+    /// Only `game_creator` (constructor) may call; binds `wager_id` for escrow settlement reads.
+    fn create_game_for(
+        ref self: TContractState,
+        player_x: ContractAddress,
+        player_o: ContractAddress,
+        wager_id: u64,
+        config: Array<felt252>,
+    ) -> u64;
     fn play_move(ref self: TContractState, game_id: u64, board_index: u8, cell_index: u8);
     fn get_game(self: @TContractState, game_id: u64) -> tictactoe::Game;
     /// Exposes derived meta for clients/tests; must stay consistent with `get_game` boards.
     fn get_game_meta(self: @TContractState, game_id: u64) -> tictactoe::GameMeta;
+    fn is_final(self: @TContractState, game_id: u64) -> bool;
+    fn get_result(self: @TContractState, game_id: u64) -> u8;
+    fn get_players(self: @TContractState, game_id: u64) -> (ContractAddress, ContractAddress);
+    fn get_wager_id(self: @TContractState, game_id: u64) -> u64;
 }
 
 #[starknet::contract]
 pub mod tictactoe {
+    use core::array::ArrayTrait;
     use core::traits::TryInto;
-    use starknet::get_caller_address;
-    use starknet::ContractAddress;
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePathEntry,
         StoragePointerReadAccess, StoragePointerWriteAccess,
     };
+    use starknet::{ContractAddress, get_caller_address};
 
     #[derive(Copy, Drop, Serde, starknet::Store)]
     pub struct LocalBoard {
@@ -56,6 +70,8 @@ pub mod tictactoe {
         pub meta_o_bits: u16,
         /// Count of sub-boards with status != 0 (finished).
         pub completed_locals: u8,
+        /// Escrow wager id when created via `create_game_for`; 0 for `create_game`.
+        pub wager_id: u64,
     }
 
     #[derive(Copy, Drop, Serde, starknet::Store)]
@@ -70,6 +86,8 @@ pub mod tictactoe {
 
     #[storage]
     struct Storage {
+        /// Only this address may call `create_game_for`.
+        game_creator: ContractAddress,
         next_game_id: u64,
         game_meta: Map<u64, GameMeta>,
         /// Per-game local boards: avoids rewriting all 9 boards on every move.
@@ -81,6 +99,7 @@ pub mod tictactoe {
         pub game_id: u64,
         pub player_x: ContractAddress,
         pub player_o: ContractAddress,
+        pub wager_id: u64,
     }
 
     #[event]
@@ -114,6 +133,11 @@ pub mod tictactoe {
     #[derive(Drop, Serde, starknet::Event)]
     pub struct GameDraw {
         pub game_id: u64,
+    }
+
+    #[constructor]
+    fn constructor(ref self: ContractState, game_creator: ContractAddress) {
+        self.game_creator.write(game_creator);
     }
 
     fn empty_local() -> LocalBoard {
@@ -158,6 +182,11 @@ pub mod tictactoe {
         }
     }
 
+    fn require_known_game(self: @ContractState, game_id: u64) {
+        let next_id = self.next_game_id.read();
+        assert(game_id < next_id, 'unknown_game');
+    }
+
     #[abi(embed_v0)]
     impl TicTacToeImpl of super::ITicTacToe<ContractState> {
         fn create_game(ref self: ContractState, opponent: ContractAddress) -> u64 {
@@ -177,11 +206,56 @@ pub mod tictactoe {
                 meta_x_bits: 0_u16,
                 meta_o_bits: 0_u16,
                 completed_locals: 0_u8,
+                wager_id: 0_u64,
             };
 
             self.game_meta.write(game_id, meta);
 
-            self.emit(Event::GameCreated(GameCreated { game_id, player_x: caller, player_o: opponent }));
+            self
+                .emit(
+                    Event::GameCreated(
+                        GameCreated {
+                            game_id, player_x: caller, player_o: opponent, wager_id: 0_u64,
+                        },
+                    ),
+                );
+
+            game_id
+        }
+
+        fn create_game_for(
+            ref self: ContractState,
+            player_x: ContractAddress,
+            player_o: ContractAddress,
+            wager_id: u64,
+            config: Array<felt252>,
+        ) -> u64 {
+            assert(get_caller_address() == self.game_creator.read(), 'not_creator');
+            let zero: ContractAddress = 0.try_into().unwrap();
+            assert(player_x != zero, 'zero_px');
+            assert(player_o != zero, 'zero_po');
+            assert(player_x != player_o, 'same_player');
+            assert(wager_id != 0_u64, 'bad_wager');
+            assert(config.is_empty(), 'bad_config');
+
+            let game_id = self.next_game_id.read();
+            self.next_game_id.write(game_id + 1_u64);
+
+            let meta = GameMeta {
+                player_x,
+                player_o,
+                next_board: 9_u8,
+                turn: 0_u8,
+                status: 0_u8,
+                meta_x_bits: 0_u16,
+                meta_o_bits: 0_u16,
+                completed_locals: 0_u8,
+                wager_id,
+            };
+
+            self.game_meta.write(game_id, meta);
+
+            self.emit(Event::GameCreated(GameCreated { game_id, player_x, player_o, wager_id }));
 
             game_id
         }
@@ -276,30 +350,57 @@ pub mod tictactoe {
             let local_board_status = local.status;
             self.game_meta.write(game_id, meta);
 
-            self.emit(Event::MovePlayed(MovePlayed {
-                game_id,
-                player: caller,
-                board_index,
-                cell_index,
-                next_board: meta.next_board,
-                next_turn: meta.turn,
-                local_board_status,
-                game_status: meta.status,
-            }));
+            self
+                .emit(
+                    Event::MovePlayed(
+                        MovePlayed {
+                            game_id,
+                            player: caller,
+                            board_index,
+                            cell_index,
+                            next_board: meta.next_board,
+                            next_turn: meta.turn,
+                            local_board_status,
+                            game_status: meta.status,
+                        },
+                    ),
+                );
         }
 
         fn get_game(self: @ContractState, game_id: u64) -> Game {
-            let next_id = self.next_game_id.read();
-            assert(game_id < next_id, 'unknown_game');
+            require_known_game(self, game_id);
             let meta = self.game_meta.read(game_id);
             let boards = load_board_set(self, game_id);
             game_from_meta(@meta, boards)
         }
 
         fn get_game_meta(self: @ContractState, game_id: u64) -> GameMeta {
-            let next_id = self.next_game_id.read();
-            assert(game_id < next_id, 'unknown_game');
+            require_known_game(self, game_id);
             self.game_meta.read(game_id)
+        }
+
+        fn is_final(self: @ContractState, game_id: u64) -> bool {
+            require_known_game(self, game_id);
+            let meta = self.game_meta.read(game_id);
+            meta.status != 0_u8
+        }
+
+        fn get_result(self: @ContractState, game_id: u64) -> u8 {
+            require_known_game(self, game_id);
+            let meta = self.game_meta.read(game_id);
+            meta.status
+        }
+
+        fn get_players(self: @ContractState, game_id: u64) -> (ContractAddress, ContractAddress) {
+            require_known_game(self, game_id);
+            let meta = self.game_meta.read(game_id);
+            (meta.player_x, meta.player_o)
+        }
+
+        fn get_wager_id(self: @ContractState, game_id: u64) -> u64 {
+            require_known_game(self, game_id);
+            let meta = self.game_meta.read(game_id);
+            meta.wager_id
         }
     }
 

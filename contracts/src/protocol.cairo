@@ -6,15 +6,16 @@
 //!
 //! ## Adapter address invariant (`game_adapter` vs `MatchRef.adapter`)
 //!
-//! `WagerConfig.game_adapter` is the **authoritative** adapter contract for the wager: it is chosen at
-//! creation and stored in the immutable config snapshot.
+//! `WagerConfig.game_adapter` is the **authoritative** adapter contract for the wager: it is chosen
+//! at creation and stored in the immutable config snapshot.
 //!
 //! When a match exists, `MatchRef.adapter` identifies which contract owns `match_id`. **They must
 //! agree:** for any wager where `match_ref` is set to an active match (non-zero adapter),
 //! **`match_ref.adapter` MUST equal `config.game_adapter`**. There is no separate “two valid
 //! adapters” interpretation—if they differ, the record is invalid.
 //!
-//! **Enforcement:** escrow **MUST** reject or normalize any `MatchRef` from `IGameAdapter::create_match`
+//! **Enforcement:** escrow **MUST** reject or normalize any `MatchRef` from
+//! `IGameAdapter::create_match`
 //! where `adapter != config.game_adapter` before persisting. Adapters **SHOULD** set
 //! `MatchRef.adapter` to `get_contract_address()` when returning from `create_match`. Clients
 //! resolving outcomes or participants **SHOULD** dispatch to `match_ref.adapter` (equal to
@@ -46,7 +47,8 @@ pub enum WagerStatus {
 /// Handle to a match inside a specific game adapter contract.
 #[derive(Copy, Drop, Serde)]
 pub struct MatchRef {
-    /// Contract that owns `match_id`; MUST equal `WagerConfig.game_adapter` when the match is live (see module docs).
+    /// Contract that owns `match_id`; MUST equal `WagerConfig.game_adapter` when the match is live
+    /// (see module docs).
     pub adapter: ContractAddress,
     pub match_id: u64,
 }
@@ -61,7 +63,8 @@ pub struct WagerDeadlines {
 /// Immutable configuration supplied at wager creation (includes deadlines).
 #[derive(Drop, Serde)]
 pub struct WagerConfig {
-    /// Authoritative adapter for this wager; `MatchRef.adapter` MUST match when a match is set (see module docs).
+    /// Authoritative adapter for this wager; `MatchRef.adapter` MUST match when a match is set (see
+    /// module docs).
     pub game_adapter: ContractAddress,
     /// ERC-20 token used for stakes; zero address if policy differs in a future revision.
     pub token: ContractAddress,
@@ -92,8 +95,7 @@ pub trait IGameAdapter<TContractState> {
         config: WagerConfig,
     ) -> MatchRef;
     fn normalized_participants(
-        self: @TContractState,
-        match_ref: MatchRef,
+        self: @TContractState, match_ref: MatchRef,
     ) -> (ContractAddress, ContractAddress);
     fn normalized_outcome(self: @TContractState, match_ref: MatchRef) -> MatchOutcome;
 }
