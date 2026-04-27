@@ -12,8 +12,18 @@ starknet = "2.12.2"
 snforge_std = "0.49.0"
 assert_macros = "2.12.2"
 
+# Starknet package outputs (after `scarb build`) live under `target/dev/`.
+# Authoritative index: `target/dev/tic_tac_toe.starknet_artifacts.json` maps `contract_name` → Sierra/CASM filenames.
+# Sierra basenames used by deploy/export scripts:
+#   - tic_tac_toe_tictactoe.{contract_class,compiled_contract_class}.json   (UTTT)
+#   - tic_tac_toe_wager_escrow.{...}.json
+#   - tic_tac_toe_mock_game_adapter.{...}.json
+#   - tic_tac_toe_mock_erc20.{...}.json
+# Test packages also emit `*.test.contract_class.json` in the same directory — do not glob these for production ABIs.
 [[target.starknet-contract]]
 sierra = true
+# Emit CASM with the same Scarb/Cairo toolchain as Sierra so starkli declare does not recompile with an older bundled compiler (CASM hash mismatch).
+casm = true
 
 [scripts]
 test = "snforge test"

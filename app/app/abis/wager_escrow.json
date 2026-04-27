@@ -1,0 +1,479 @@
+[
+  {
+    "type": "impl",
+    "name": "EscrowImpl",
+    "interface_name": "tic_tac_toe::protocol::IWagerEscrow"
+  },
+  {
+    "type": "struct",
+    "name": "core::integer::u256",
+    "members": [
+      {
+        "name": "low",
+        "type": "core::integer::u128"
+      },
+      {
+        "name": "high",
+        "type": "core::integer::u128"
+      }
+    ]
+  },
+  {
+    "type": "struct",
+    "name": "tic_tac_toe::protocol::WagerDeadlines",
+    "members": [
+      {
+        "name": "accept_by",
+        "type": "core::integer::u64"
+      },
+      {
+        "name": "resolve_by",
+        "type": "core::integer::u64"
+      }
+    ]
+  },
+  {
+    "type": "struct",
+    "name": "tic_tac_toe::protocol::WagerConfig",
+    "members": [
+      {
+        "name": "game_adapter",
+        "type": "core::starknet::contract_address::ContractAddress"
+      },
+      {
+        "name": "token",
+        "type": "core::starknet::contract_address::ContractAddress"
+      },
+      {
+        "name": "stake",
+        "type": "core::integer::u256"
+      },
+      {
+        "name": "deadlines",
+        "type": "tic_tac_toe::protocol::WagerDeadlines"
+      },
+      {
+        "name": "designated_opponent",
+        "type": "core::starknet::contract_address::ContractAddress"
+      },
+      {
+        "name": "game_params",
+        "type": "core::array::Array::<core::felt252>"
+      }
+    ]
+  },
+  {
+    "type": "enum",
+    "name": "tic_tac_toe::protocol::MatchOutcome",
+    "variants": [
+      {
+        "name": "None",
+        "type": "()"
+      },
+      {
+        "name": "CreatorWin",
+        "type": "()"
+      },
+      {
+        "name": "OpponentWin",
+        "type": "()"
+      },
+      {
+        "name": "Draw",
+        "type": "()"
+      },
+      {
+        "name": "Cancelled",
+        "type": "()"
+      },
+      {
+        "name": "Expired",
+        "type": "()"
+      }
+    ]
+  },
+  {
+    "type": "enum",
+    "name": "tic_tac_toe::protocol::WagerStatus",
+    "variants": [
+      {
+        "name": "Open",
+        "type": "()"
+      },
+      {
+        "name": "Matched",
+        "type": "()"
+      },
+      {
+        "name": "Resolved",
+        "type": "()"
+      },
+      {
+        "name": "Cancelled",
+        "type": "()"
+      },
+      {
+        "name": "Expired",
+        "type": "()"
+      }
+    ]
+  },
+  {
+    "type": "struct",
+    "name": "tic_tac_toe::protocol::MatchRef",
+    "members": [
+      {
+        "name": "adapter",
+        "type": "core::starknet::contract_address::ContractAddress"
+      },
+      {
+        "name": "match_id",
+        "type": "core::integer::u64"
+      }
+    ]
+  },
+  {
+    "type": "struct",
+    "name": "tic_tac_toe::protocol::WagerRecord",
+    "members": [
+      {
+        "name": "wager_id",
+        "type": "core::integer::u64"
+      },
+      {
+        "name": "status",
+        "type": "tic_tac_toe::protocol::WagerStatus"
+      },
+      {
+        "name": "config",
+        "type": "tic_tac_toe::protocol::WagerConfig"
+      },
+      {
+        "name": "creator",
+        "type": "core::starknet::contract_address::ContractAddress"
+      },
+      {
+        "name": "opponent",
+        "type": "core::starknet::contract_address::ContractAddress"
+      },
+      {
+        "name": "match_ref",
+        "type": "tic_tac_toe::protocol::MatchRef"
+      }
+    ]
+  },
+  {
+    "type": "interface",
+    "name": "tic_tac_toe::protocol::IWagerEscrow",
+    "items": [
+      {
+        "type": "function",
+        "name": "create",
+        "inputs": [
+          {
+            "name": "config",
+            "type": "tic_tac_toe::protocol::WagerConfig"
+          }
+        ],
+        "outputs": [
+          {
+            "type": "core::integer::u64"
+          }
+        ],
+        "state_mutability": "external"
+      },
+      {
+        "type": "function",
+        "name": "accept",
+        "inputs": [
+          {
+            "name": "wager_id",
+            "type": "core::integer::u64"
+          }
+        ],
+        "outputs": [],
+        "state_mutability": "external"
+      },
+      {
+        "type": "function",
+        "name": "cancel",
+        "inputs": [
+          {
+            "name": "wager_id",
+            "type": "core::integer::u64"
+          }
+        ],
+        "outputs": [],
+        "state_mutability": "external"
+      },
+      {
+        "type": "function",
+        "name": "expire",
+        "inputs": [
+          {
+            "name": "wager_id",
+            "type": "core::integer::u64"
+          }
+        ],
+        "outputs": [],
+        "state_mutability": "external"
+      },
+      {
+        "type": "function",
+        "name": "resolve",
+        "inputs": [
+          {
+            "name": "wager_id",
+            "type": "core::integer::u64"
+          }
+        ],
+        "outputs": [
+          {
+            "type": "tic_tac_toe::protocol::MatchOutcome"
+          }
+        ],
+        "state_mutability": "external"
+      },
+      {
+        "type": "function",
+        "name": "get_wager",
+        "inputs": [
+          {
+            "name": "wager_id",
+            "type": "core::integer::u64"
+          }
+        ],
+        "outputs": [
+          {
+            "type": "tic_tac_toe::protocol::WagerRecord"
+          }
+        ],
+        "state_mutability": "view"
+      },
+      {
+        "type": "function",
+        "name": "get_status",
+        "inputs": [
+          {
+            "name": "wager_id",
+            "type": "core::integer::u64"
+          }
+        ],
+        "outputs": [
+          {
+            "type": "tic_tac_toe::protocol::WagerStatus"
+          }
+        ],
+        "state_mutability": "view"
+      }
+    ]
+  },
+  {
+    "type": "constructor",
+    "name": "constructor",
+    "inputs": [
+      {
+        "name": "approved_token",
+        "type": "core::starknet::contract_address::ContractAddress"
+      },
+      {
+        "name": "fee_bps",
+        "type": "core::integer::u16"
+      },
+      {
+        "name": "fee_recipient",
+        "type": "core::starknet::contract_address::ContractAddress"
+      },
+      {
+        "name": "initial_adapters",
+        "type": "core::array::Array::<core::starknet::contract_address::ContractAddress>"
+      }
+    ]
+  },
+  {
+    "type": "event",
+    "name": "tic_tac_toe::wager_escrow::wager_escrow::WagerCreated",
+    "kind": "struct",
+    "members": [
+      {
+        "name": "wager_id",
+        "type": "core::integer::u64",
+        "kind": "data"
+      },
+      {
+        "name": "creator",
+        "type": "core::starknet::contract_address::ContractAddress",
+        "kind": "data"
+      },
+      {
+        "name": "game_adapter",
+        "type": "core::starknet::contract_address::ContractAddress",
+        "kind": "data"
+      },
+      {
+        "name": "token",
+        "type": "core::starknet::contract_address::ContractAddress",
+        "kind": "data"
+      },
+      {
+        "name": "stake",
+        "type": "core::integer::u256",
+        "kind": "data"
+      },
+      {
+        "name": "accept_by",
+        "type": "core::integer::u64",
+        "kind": "data"
+      },
+      {
+        "name": "resolve_by",
+        "type": "core::integer::u64",
+        "kind": "data"
+      },
+      {
+        "name": "designated_opponent",
+        "type": "core::starknet::contract_address::ContractAddress",
+        "kind": "data"
+      }
+    ]
+  },
+  {
+    "type": "event",
+    "name": "tic_tac_toe::wager_escrow::wager_escrow::WagerAccepted",
+    "kind": "struct",
+    "members": [
+      {
+        "name": "wager_id",
+        "type": "core::integer::u64",
+        "kind": "data"
+      },
+      {
+        "name": "opponent",
+        "type": "core::starknet::contract_address::ContractAddress",
+        "kind": "data"
+      },
+      {
+        "name": "match_id",
+        "type": "core::integer::u64",
+        "kind": "data"
+      }
+    ]
+  },
+  {
+    "type": "event",
+    "name": "tic_tac_toe::wager_escrow::wager_escrow::WagerCancelled",
+    "kind": "struct",
+    "members": [
+      {
+        "name": "wager_id",
+        "type": "core::integer::u64",
+        "kind": "data"
+      }
+    ]
+  },
+  {
+    "type": "enum",
+    "name": "core::bool",
+    "variants": [
+      {
+        "name": "False",
+        "type": "()"
+      },
+      {
+        "name": "True",
+        "type": "()"
+      }
+    ]
+  },
+  {
+    "type": "event",
+    "name": "tic_tac_toe::wager_escrow::wager_escrow::WagerResolved",
+    "kind": "struct",
+    "members": [
+      {
+        "name": "wager_id",
+        "type": "core::integer::u64",
+        "kind": "data"
+      },
+      {
+        "name": "outcome_tag",
+        "type": "core::integer::u8",
+        "kind": "data"
+      },
+      {
+        "name": "via_expire",
+        "type": "core::bool",
+        "kind": "data"
+      },
+      {
+        "name": "winner",
+        "type": "core::starknet::contract_address::ContractAddress",
+        "kind": "data"
+      },
+      {
+        "name": "winner_amount",
+        "type": "core::integer::u256",
+        "kind": "data"
+      },
+      {
+        "name": "fee_amount",
+        "type": "core::integer::u256",
+        "kind": "data"
+      }
+    ]
+  },
+  {
+    "type": "event",
+    "name": "tic_tac_toe::wager_escrow::wager_escrow::WagerRefunded",
+    "kind": "struct",
+    "members": [
+      {
+        "name": "wager_id",
+        "type": "core::integer::u64",
+        "kind": "data"
+      },
+      {
+        "name": "to",
+        "type": "core::starknet::contract_address::ContractAddress",
+        "kind": "data"
+      },
+      {
+        "name": "amount",
+        "type": "core::integer::u256",
+        "kind": "data"
+      }
+    ]
+  },
+  {
+    "type": "event",
+    "name": "tic_tac_toe::wager_escrow::wager_escrow::Event",
+    "kind": "enum",
+    "variants": [
+      {
+        "name": "WagerCreated",
+        "type": "tic_tac_toe::wager_escrow::wager_escrow::WagerCreated",
+        "kind": "nested"
+      },
+      {
+        "name": "WagerAccepted",
+        "type": "tic_tac_toe::wager_escrow::wager_escrow::WagerAccepted",
+        "kind": "nested"
+      },
+      {
+        "name": "WagerCancelled",
+        "type": "tic_tac_toe::wager_escrow::wager_escrow::WagerCancelled",
+        "kind": "nested"
+      },
+      {
+        "name": "WagerResolved",
+        "type": "tic_tac_toe::wager_escrow::wager_escrow::WagerResolved",
+        "kind": "nested"
+      },
+      {
+        "name": "WagerRefunded",
+        "type": "tic_tac_toe::wager_escrow::wager_escrow::WagerRefunded",
+        "kind": "nested"
+      }
+    ]
+  }
+]

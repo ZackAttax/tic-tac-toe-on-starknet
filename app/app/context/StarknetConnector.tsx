@@ -174,9 +174,11 @@ function registerTsCartridgeAdapter(
         );
 
         if (authResult.type === "success") {
-          const callbackUrl =
+          const sessionCallbackUrl =
             "url" in authResult && authResult.url ? authResult.url : undefined;
-          return { status: "success", callbackUrl };
+          return sessionCallbackUrl
+            ? { status: "success", callbackUrl: sessionCallbackUrl }
+            : { status: "success" };
         }
 
         return { status: authResult.type === "cancel" ? "cancel" : "dismiss" };
@@ -226,15 +228,38 @@ async function ensureCartridgeAdapterRegistered(
   }
 }
 
-function getTicTacToePolicies() {
+/** Cartridge session policies: TicTacToe game contract + optional wager escrow. */
+function getSessionPolicies() {
   const contractAddress =
     process.env.EXPO_PUBLIC_TIC_TAC_TOE_CONTRACT_ADDRESS ||
     DEFAULT_TIC_TAC_TOE_CONTRACT_ADDRESS;
 
-  return [
+  const gamePolicies = [
     { target: contractAddress, method: "create_game" },
     { target: contractAddress, method: "play_move" },
+    { target: contractAddress, method: "claim_timeout" },
   ];
+
+  const escrowRaw = process.env.EXPO_PUBLIC_WAGER_ESCROW_CONTRACT_ADDRESS?.trim();
+  if (!escrowRaw) {
+    return gamePolicies;
+  }
+
+  const withEscrow = [
+    ...gamePolicies,
+    { target: escrowRaw, method: "create" },
+    { target: escrowRaw, method: "accept" },
+    { target: escrowRaw, method: "cancel" },
+    { target: escrowRaw, method: "expire" },
+    { target: escrowRaw, method: "resolve" },
+  ];
+
+  const tokenRaw = process.env.EXPO_PUBLIC_WAGER_TOKEN_ADDRESS?.trim();
+  if (!tokenRaw) {
+    return withEscrow;
+  }
+
+  return [...withEscrow, { target: tokenRaw, method: "approve" }];
 }
 
 type StarknetConnectorContextType = {
@@ -295,7 +320,7 @@ export const StarknetConnectorProvider: React.FC<{
           strategy: "cartridge",
           deploy: "never",
           cartridge: {
-            policies: getTicTacToePolicies(),
+            policies: getSessionPolicies(),
             ...(process.env.EXPO_PUBLIC_CARTRIDGE_PRESET
               ? { preset: process.env.EXPO_PUBLIC_CARTRIDGE_PRESET }
               : {}),
@@ -368,7 +393,9 @@ export const StarknetConnectorProvider: React.FC<{
         }
 
         const receipt = await getReceiptIfAvailable(provider, txHash);
-        return { success: false, reverted: true, receipt };
+        return receipt
+          ? { success: false, reverted: true, receipt }
+          : { success: false, reverted: true };
       }
     },
     [provider]

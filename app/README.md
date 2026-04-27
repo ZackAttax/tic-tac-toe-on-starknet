@@ -1,6 +1,6 @@
 # Starkzap Tic-Tac-Toe (React Native / Expo)
 
-React Native Expo example app for Starknet tic-tac-toe in this monorepo.
+React Native Expo app for Starknet tic-tac-toe in this monorepo (`app/`).
 
 ## Prerequisites
 
@@ -10,42 +10,57 @@ React Native Expo example app for Starknet tic-tac-toe in this monorepo.
 
 ## Setup
 
-This app is configured to run with defaults:
+Default network is Sepolia. Default Cartridge RPC is `https://api.cartridge.gg/x/starknet/sepolia`.
 
-- Public tic-tac-toe contract address is already set in code/env template.
-- Default network is Sepolia.
-- Default Cartridge RPC is `https://api.cartridge.gg/x/starknet/sepolia`.
-
-Optional override file:
+Copy the env template:
 
 ```bash
-cd examples/tic-tac-toe
+cd app
 cp .env.example .env
 ```
 
-Useful env vars:
+### Environment variables
 
-- `EXPO_PUBLIC_STARKNET_NETWORK`: `SN_SEPOLIA` or `SN_MAIN`
-- `EXPO_PUBLIC_CARTRIDGE_RPC`
-- `EXPO_PUBLIC_CARTRIDGE_URL`
-- `EXPO_PUBLIC_CARTRIDGE_REDIRECT_URL` (optional override)
+| Variable | Purpose |
+|----------|---------|
+| `EXPO_PUBLIC_ENABLE_STARKNET` | Enable Starknet (`true` / `1`) |
+| `EXPO_PUBLIC_STARKNET_NETWORK` | `SN_SEPOLIA` or `SN_MAIN` |
+| `EXPO_PUBLIC_TIC_TAC_TOE_CONTRACT_ADDRESS` | Deployed UTTT (`tictactoe`) contract |
+| `EXPO_PUBLIC_WAGER_ESCROW_CONTRACT_ADDRESS` | Optional; `wager_escrow` — wager flows stay limited when unset |
+| `EXPO_PUBLIC_WAGER_TOKEN_ADDRESS` | Optional; ERC20 for stakes (must match escrow `approved_token`) |
+| `EXPO_PUBLIC_GAME_ADAPTER_CONTRACT_ADDRESS` | Optional; `IGameAdapter` aligned with escrow allowlist |
+| `EXPO_PUBLIC_CARTRIDGE_RPC` | Cartridge RPC override |
+| `EXPO_PUBLIC_CARTRIDGE_URL` | Cartridge UI URL |
+| `EXPO_PUBLIC_CARTRIDGE_PRESET` | Optional Cartridge preset |
+| `EXPO_PUBLIC_CARTRIDGE_REDIRECT_URL` | Optional; overrides Expo callback URL for auth |
+
+Deploy addresses for a test stack are produced by [`../contracts/deploy-stack.sh`](../contracts/deploy-stack.sh); see repo root [`README.md`](../README.md) and [`../contracts/DEPLOY.md`](../contracts/DEPLOY.md).
 
 ## Install
 
-From repo root (recommended for workspace install):
+From repo root:
 
 ```bash
 npm install
 ```
 
-Or from this app directory:
+Or from this directory:
 
 ```bash
-cd examples/tic-tac-toe
-npm install
+cd app && npm install
 ```
 
-This app depends on `starkzap-native` from `../../packages/native`. The `postinstall` script builds the SDK packages from repo root.
+This app depends on `starkzap-native` from `../../starkzap/packages/native` (path dependency in `package.json`).
+
+## ABIs
+
+Contract ABIs live in `app/abis/` (JSON). Regenerate after contract interface changes:
+
+```bash
+npm run export-abis
+```
+
+(Runs `contracts/scripts/export-abis.sh`.)
 
 ## Cartridge Session Adapter
 
@@ -56,7 +71,7 @@ Use the Metro wrapper for runtime polyfills; the package currently exports `star
 ## Run
 
 ```bash
-cd examples/tic-tac-toe
+cd app
 npm run start
 ```
 

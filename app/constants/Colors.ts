@@ -12,6 +12,8 @@ export default {
     brandPrimary: "#6C47FF", // purple
     brandAccent: "#00D3FF", // cyan
     boardLine: "rgba(108,71,255,0.45)",
+    forcedBoardFill: "rgba(108,71,255,0.12)",
+    finishedLocalOverlay: "rgba(0,0,0,0.26)",
     winHighlight: "rgba(0,211,255,0.15)",
     xSymbol: "#6C47FF",
     oSymbol: "#00D3FF",
@@ -26,6 +28,8 @@ export default {
     brandPrimary: "#6C47FF",
     brandAccent: "#00D3FF",
     boardLine: "rgba(108,71,255,0.6)",
+    forcedBoardFill: "rgba(108,71,255,0.22)",
+    finishedLocalOverlay: "rgba(0,0,0,0.42)",
     winHighlight: "rgba(0,211,255,0.22)",
     xSymbol: "#6C47FF",
     oSymbol: "#00D3FF",
